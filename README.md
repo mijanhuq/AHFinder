@@ -7,8 +7,8 @@ An implementation of the apparent horizon location algorithm from [Huq, Choptuik
 This repository represents an experiment in AI-assisted scientific computing. The goal was to recreate a numerical relativity algorithm that one of the authors (M. Huq) originally developed **30 years ago** during his PhD research—accomplished in a matter of **hours** through collaboration with Claude (Anthropic's AI assistant).
 
 <p float="left">
-  <img src="doc/assets/Cartoon_Gemini_Pro_Part1.png" width="200" />
-  <img src="doc/assets/Cartoon_Gemini_Pro_part2.png" width="200" /> 
+  <img src="doc/assets/Cartoon_Gemini_Pro_Part1.png" width="400" />
+  <img src="doc/assets/Cartoon_Gemini_Pro_part2.png" width="400" /> 
 </p>
 
 ### What We Built
