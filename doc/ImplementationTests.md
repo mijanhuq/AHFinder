@@ -420,8 +420,10 @@ The Fast interpolator is set as the default due to its significant performance a
 | Expansion Formula | ✓ PASS | 2/2 |
 | Newton Solver | ✓ PASS | 6/6 |
 | Performance | ✓ PASS | 2/2 |
+| Kerr Metric | ✓ PASS | 2/2 |
+| Boosted Metrics | ✓ PASS | 3/3 |
 
-**Total: 27/27 tests passing**
+**Total: 32/32 tests passing**
 
 ---
 
@@ -491,3 +493,135 @@ J = self.jacobian_computer.compute_dense(rho)
 **Impact**: Basin of attraction expanded from r₀ ∈ [1.9, 2.0] to r₀ ∈ [1.0, 3.0].
 
 **Lesson**: Always test that mathematical identities hold. The row-sum test would have immediately caught this bug.
+
+---
+
+### Fix 3: Kerr Extrinsic Curvature Sign Error
+
+**Problem**: The Newton solver failed to converge for Kerr metrics (even with a=0, which should reduce to Schwarzschild).
+
+**Root Cause**: The extrinsic curvature formula had the wrong sign:
+```python
+# BEFORE (incorrect):
+K = -0.5 / alpha * (D_beta + D_beta.T)
+
+# AFTER (correct):
+K = +0.5 / alpha * (D_beta + D_beta.T)
+```
+
+**Diagnosis**: Compared K_ij values between Schwarzschild (which uses an analytical formula) and Kerr(a=0):
+- Schwarzschild K_xx = -0.53
+- Kerr(a=0) K_xx = +0.53 (opposite sign!)
+
+**Solution**: Fixed sign in both `kerr.py` and `boosted.py`.
+
+**Verification**: After fix, Kerr(a=0) matches Schwarzschild with difference norm < 1e-10.
+
+---
+
+### Fix 4: Boosted Metric Time Derivative
+
+**Problem**: Boosted Schwarzschild and Kerr horizons had area ~13% larger than expected. Area should be Lorentz invariant.
+
+**Root Cause**: The boosted black hole is NOT stationary in the lab frame—it's moving. The extrinsic curvature formula was missing the time derivative term:
+
+```python
+# BEFORE (assumes stationary, wrong for boosted):
+K_ij = (1/2α)(D_i β_j + D_j β_i)
+
+# AFTER (correct for moving black hole):
+K_ij = (1/2α)(D_i β_j + D_j β_i - ∂_t γ_ij)
+```
+
+**Diagnosis**: At point (0, 2, 0) on y-axis:
+- ∂_t γ_ij has norm 0.255 (NOT zero!)
+- This non-zero time derivative caused K_trace to be 15% too large
+- Larger K pushed the Θ = 0 surface outward
+
+**Solution**: Added `_dgamma_dt()` method to compute the time derivative numerically by tracking how the metric changes as the black hole center moves from (0,0,0) to (v*t, 0, 0).
+
+**Verification**:
+| Metric | Before Fix | After Fix | Expected |
+|--------|------------|-----------|----------|
+| Area ratio (boosted/unboosted) | 1.13 | 0.9999 | 1.0 |
+| x/y ratio (N_s=13) | 1.03 | 0.949 | 0.954 |
+
+---
+
+## 8. Kerr Metric Tests
+
+### Test 8.1: Kerr Reduces to Schwarzschild at a=0
+
+**Purpose**: Verify that KerrMetric(a=0) produces identical results to SchwarzschildMetric.
+
+**Results**:
+| Quantity | Schwarzschild | Kerr(a=0) | Difference |
+|----------|--------------|-----------|------------|
+| γ_ij at (2,0,0) | diag(2,1,1) | diag(2,1,1) | 0 |
+| α at (2,0,0) | 0.7071 | 0.7071 | < 1e-10 |
+| β at (2,0,0) | (0.5, 0, 0) | (0.5, 0, 0) | < 1e-10 |
+| K_ij at (2,0,0) | matches | matches | < 1e-10 |
+
+**Status**: ✓ PASS
+
+### Test 8.2: Kerr Horizon Finding
+
+**Purpose**: Find the apparent horizon for Kerr black holes.
+
+**Theory**: Kerr horizon radius r₊ = M + √(M² - a²)
+
+**Results** (N_s=9):
+| Spin a | Expected r₊ | Found r | Iterations | Area Error |
+|--------|-------------|---------|------------|------------|
+| 0.0 | 2.000 | 2.001 | 3 | 1.2% |
+| 0.3 | 1.954 | 1.956 | 3 | 1.0% |
+| 0.5 | 1.866 | 1.897 | 4 | 1.1% |
+| 0.7 | 1.714 | 1.750 | 4 | 1.5% |
+
+**Status**: ✓ PASS - All Kerr horizons found successfully.
+
+---
+
+## 9. Boosted Metric Tests
+
+### Test 9.1: Zero Boost Reduces to Unboosted
+
+**Purpose**: Verify BoostedMetric with v=0 matches the base metric.
+
+**Results**:
+| Quantity | Base Metric | Boosted(v=0) | Match |
+|----------|-------------|--------------|-------|
+| γ_ij | matches | matches | ✓ |
+| α | matches | matches | ✓ |
+| β | matches | matches | ✓ |
+| K_ij | matches | matches | ✓ |
+
+**Status**: ✓ PASS
+
+### Test 9.2: Boosted Schwarzschild Horizon
+
+**Purpose**: Verify Lorentz contraction and area invariance for boosted Schwarzschild.
+
+**Theory**:
+- Horizon should be Lorentz-contracted in boost direction: x_extent = 4M/γ
+- Area should be invariant: A_boosted = A_unboosted
+
+**Results** (v=0.3, γ=1.048):
+
+| N_s | Area Ratio | x/y Ratio | Expected x/y |
+|-----|------------|-----------|--------------|
+| 9 | 0.9999 | 0.943 | 0.954 |
+| 13 | 0.9998 | 0.949 | 0.954 |
+
+**Status**: ✓ PASS - Area invariance confirmed, Lorentz contraction observed.
+
+### Test 9.3: Boosted Kerr Horizon
+
+**Purpose**: Verify boosted Kerr metric works correctly.
+
+**Results** (a=0.5, v=0.3, N_s=9):
+- Converges in 4 iterations
+- Area ratio: 0.9996 (essentially 1.0)
+- x/y ratio: 0.943 (Lorentz contracted)
+
+**Status**: ✓ PASS

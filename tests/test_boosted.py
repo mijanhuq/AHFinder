@@ -53,7 +53,7 @@ class TestBoostedMetric:
         boosted = BoostedMetric(base, velocity)
 
         expected_gamma = 1.0 / np.sqrt(1 - v**2)
-        assert np.isclose(boosted.gamma, expected_gamma)
+        assert np.isclose(boosted.lorentz_gamma, expected_gamma)
 
     def test_gamma_symmetric(self):
         """Test that boosted metric is symmetric."""

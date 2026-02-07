@@ -254,8 +254,9 @@ class KerrMetric(Metric):
                 for k in range(3):
                     D_beta[i, j] -= chris[k, i, j] * beta_down[k]
 
-        # K_ij = -(1/2α)(D_i β_j + D_j β_i)
-        K = -0.5 / alpha * (D_beta + D_beta.T)
+        # K_ij = (1/2α)(D_i β_j + D_j β_i) for stationary spacetimes
+        # Note: Sign convention matches Schwarzschild analytical formula
+        K = 0.5 / alpha * (D_beta + D_beta.T)
 
         return K
 

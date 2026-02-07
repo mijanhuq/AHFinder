@@ -377,14 +377,112 @@ assert np.allclose(row_sums, dF_dr)  # This would have caught the bug!
 
 ---
 
+---
+
+## Session: 2026-02-04 - Kerr and Boosted Metric Testing
+
+### Prompt: Test Boosted Kerr Metric
+
+**User Request**: Test the boosted Kerr metric implementation.
+
+### Bugs Found and Fixed
+
+**1. Extrinsic Curvature Sign Error (Kerr and Boosted)**
+
+Both Kerr and Boosted metrics had wrong sign in extrinsic curvature formula:
+```python
+# Before (wrong):
+K = -0.5 / alpha * (D_beta + D_beta.T)
+
+# After (correct):
+K = 0.5 / alpha * (D_beta + D_beta.T)
+```
+
+This was discovered by comparing Kerr(a=0) with Schwarzschild:
+- Schwarzschild K_xx = -0.53 (correct, from analytical formula)
+- Kerr(a=0) K_xx = +0.53 (wrong, opposite sign)
+
+**2. Finder API Mismatch**
+
+`finder.py` was passing `linear_solver` and `jacobian_type` arguments that `NewtonSolver` no longer accepts. Fixed by removing these deprecated arguments.
+
+**3. Boost Transformation Rewrite**
+
+Rewrote the boost transformation to properly handle the 4-metric decomposition:
+- Added `_boost_4vector()` for correct Lorentz transformation of null vectors
+- Added `_get_4metric_components()` to compute g_00, g_0i, g_ij from boosted H and l
+- Updated `lapse()` and `shift()` to use proper formulas: α² = 1/(1 + 2H l_0²)
+
+### Test Results
+
+**Unboosted Kerr (a=0.5)**:
+- Converges in 4 iterations
+- Mean radius 1.897 (expected r_+ = 1.866)
+- Area 46.4 (expected 46.9)
+- Status: WORKING
+
+**Boosted Schwarzschild (v=0.3)**:
+| N_s | Unboosted Area | Boosted Area | Ratio | x/y Ratio |
+|-----|----------------|--------------|-------|-----------|
+| 9   | 49.67          | 56.25        | 1.13  | 0.932     |
+| 13  | 50.00          | 56.64        | 1.13  | 0.937     |
+| 17  | 50.12          | 56.79        | 1.13  | 0.939     |
+
+Expected: Area ratio ~1.0 (invariant), x/y ratio = 0.954
+
+### Root Cause and Fix: Boosted Area Not Invariant
+
+**Problem**: Boosted area was ~13% larger than unboosted.
+
+**Root Cause**: The boosted metric is NOT stationary in the lab frame (black hole is moving). The extrinsic curvature formula was missing the time derivative term.
+
+**Wrong formula** (assumes stationary):
+```python
+K_ij = (1/2α)(D_i β_j + D_j β_i)
+```
+
+**Correct formula** (for moving black hole):
+```python
+K_ij = (1/2α)(D_i β_j + D_j β_i - ∂_t γ_ij)
+```
+
+The time derivative ∂_t γ_ij is non-zero because the black hole center moves from (0,0,0) at t=0 to (v*t, 0, 0) at time t.
+
+**Fix implemented**: Added `_dgamma_dt()` method to compute ∂_t γ_ij numerically.
+
+**Results after fix**:
+
+| Metric | Area Ratio | x/y Ratio | Expected x/y |
+|--------|------------|-----------|--------------|
+| Boosted Schwarzschild (N_s=9) | 0.9999 | 0.943 | 0.954 |
+| Boosted Schwarzschild (N_s=13) | 0.9998 | 0.949 | 0.954 |
+| Boosted Kerr (a=0.5, N_s=9) | 0.9996 | 0.943 | 0.954 |
+
+Area invariance restored! x/y ratio converges toward expected value with resolution.
+
+### Performance Profiling
+
+**Top 3 bottlenecks for boosted metrics**:
+1. `extrinsic_curvature()`: 0.3 ms/call (75% of metric ops)
+2. `christoffel()`: 0.1 ms/call (called inside K)
+3. `dgamma()`: 0.1 ms/call
+
+**Jacobian dominates**: O(n_points²) complexity
+- N_s=9: Jacobian takes 2.7s
+- N_s=17: Jacobian takes ~45s (estimated)
+
+---
+
 ## Current Status
 
 - **Core algorithm**: Working correctly with O(h²) convergence
 - **Schwarzschild test**: PASSING (finds r = 2M)
+- **Kerr test**: PASSING (finds correct horizon after K sign fix)
+- **Boosted Schwarzschild**: PASSING (area ratio ~0.9999, Lorentz contraction observed)
+- **Boosted Kerr**: PASSING (area ratio ~0.9996, converges in 4 iterations)
 - **Initial condition sensitivity**: FIXED - converges from r₀ ∈ [1.0, 3.0]
-- **Jacobian**: Now uses dense computation (sparse version had missing couplings)
-- **Performance**: Optimized with SciPy-based interpolation (2-5x speedup)
-- **Default interpolator**: FastInterpolator (quintic spline)
-- **Truncation error**: O(h²) convergence verified
-- **Documentation**: Updated with graphs in `doc/graphs/`
-- **Next steps**: Test Kerr metric, add Jacobian row-sum validation test
+- **Jacobian**: Uses dense computation
+- **Performance**: Boosted metrics slower due to time derivative computation
+- **Next steps**:
+  - Optimize boosted metric performance (cache computations)
+  - Add higher-resolution validation tests

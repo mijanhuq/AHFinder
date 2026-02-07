@@ -28,7 +28,7 @@ class BoostedMetric(Metric):
     Attributes:
         base_metric: The underlying (unboosted) metric
         velocity: 3-vector velocity of the boost
-        gamma: Lorentz factor
+        lorentz_gamma: Lorentz factor γ = 1/√(1-v²)
     """
 
     def __init__(self, base_metric: Metric, velocity: np.ndarray):
@@ -52,10 +52,10 @@ class BoostedMetric(Metric):
         self.v_mag = v_mag
 
         if v_mag > 1e-14:
-            self.gamma = 1.0 / np.sqrt(1 - v_mag**2)
+            self.lorentz_gamma = 1.0 / np.sqrt(1 - v_mag**2)
             self.n_hat = velocity / v_mag
         else:
-            self.gamma = 1.0
+            self.lorentz_gamma = 1.0
             self.n_hat = np.array([1.0, 0.0, 0.0])
 
     def _transform_coordinates(self, x: float, y: float, z: float):
@@ -84,7 +84,7 @@ class BoostedMetric(Metric):
 
         # Transform: parallel component is Lorentz contracted in lab frame
         # so expand it to get rest frame coordinate
-        x_rest = x_perp + self.gamma * x_parallel
+        x_rest = x_perp + self.lorentz_gamma * x_parallel
 
         return x_rest[0], x_rest[1], x_rest[2]
 
@@ -116,79 +116,87 @@ class BoostedMetric(Metric):
 
         return H_rest, l_rest, (xr, yr, zr)
 
-    def _boost_H_and_l(self, H_rest: float, l_rest: np.ndarray):
+    def _boost_4vector(self, l_0: float, l_spatial: np.ndarray):
         """
-        Transform H and l under a Lorentz boost.
+        Boost a 4-vector l_μ = (l_0, l_i) from rest frame to lab frame.
 
-        The null vector l_μ = (l_0, l_i) transforms as:
-            l'_0 = γ(l_0 - v·l)
-            l'_i = l_i + [(γ-1)l_∥ - γl_0 v]_i
-
-        where l_∥ = (l·n̂)n̂ is the component parallel to boost.
-
-        H transforms to keep g_μν = η_μν + 2H l_μ l_ν covariant:
-            H' = H (in coordinate-invariant sense, but l changes)
-
-        Actually, for Kerr-Schild: H' l'_μ l'_ν = H l_μ l_ν under boost,
-        so H' = H / (l'_0)² when l_0 = 1.
+        For a boost with velocity v in direction n̂:
+            l'_0 = γ(l_0 - v·l_spatial)
+            l'_parallel = γ(l_parallel - v*l_0)
+            l'_perp = l_perp
 
         Returns:
-            Tuple of (H_boosted, l_boosted_spatial)
+            Tuple of (l'_0, l'_spatial)
         """
         if self.v_mag < 1e-14:
-            return H_rest, l_rest
+            return l_0, l_spatial
 
         v = self.velocity
-        gamma = self.gamma
+        gamma = self.lorentz_gamma
 
-        # Rest frame: l_μ = (1, l_i) is ingoing null
+        # Transform temporal component
+        v_dot_l = np.dot(v, l_spatial)
+        l_0_boosted = gamma * (l_0 - v_dot_l)
+
+        # Transform spatial components
+        l_parallel = np.dot(l_spatial, self.n_hat) * self.n_hat
+        l_perp = l_spatial - l_parallel
+        l_spatial_boosted = l_perp + gamma * (l_parallel - v * l_0)
+
+        return l_0_boosted, l_spatial_boosted
+
+    def _get_4metric_components(self, x: float, y: float, z: float):
+        """
+        Compute the full 4-metric components g_μν at lab frame point.
+
+        The Kerr-Schild form g_μν = η_μν + 2H l_μ l_ν is preserved,
+        but we need to compute it properly in the lab frame.
+
+        Returns:
+            Tuple of (g_00, g_0i, g_ij, H, l_0, l_spatial)
+        """
+        # Get H and l in rest frame
+        H_rest, l_rest, _ = self._get_rest_frame_H_and_l(x, y, z)
+
+        # In rest frame, l_μ = (1, l_i) with l_i unit vector
         l_0_rest = 1.0
-        l_spatial_rest = l_rest
 
-        # v·l (spatial)
-        v_dot_l = np.dot(v, l_spatial_rest)
+        # Boost to lab frame
+        l_0, l_spatial = self._boost_4vector(l_0_rest, l_rest)
 
-        # Boosted null vector (4-vector)
-        l_0_boosted = gamma * (l_0_rest - v_dot_l)
+        # H is a scalar at the spacetime point - it doesn't transform
+        # The Kerr-Schild form is g_μν = η_μν + 2H l_μ l_ν
+        H = H_rest
 
-        # Spatial part
-        l_parallel = np.dot(l_spatial_rest, self.n_hat) * self.n_hat
-        l_perp = l_spatial_rest - l_parallel
+        # Compute 4-metric components
+        g_00 = -1.0 + 2 * H * l_0 * l_0
+        g_0i = 2 * H * l_0 * l_spatial  # This is a 3-vector
+        g_ij = np.eye(3) + 2 * H * np.outer(l_spatial, l_spatial)
 
-        l_spatial_boosted = l_perp + gamma * (l_parallel - v * l_0_rest)
-
-        # Normalize spatial part to have unit magnitude dotted with itself
-        # in the boosted frame metric (which is still ~flat far from horizon)
-        l_mag = np.sqrt(np.dot(l_spatial_boosted, l_spatial_boosted))
-        if l_mag > 1e-14:
-            l_spatial_boosted = l_spatial_boosted / l_mag
-
-        # H transformation: H' (l'_0)² = H (l_0)² for preserved Kerr-Schild form
-        # So H' = H × (l_0 / l'_0)²
-        if abs(l_0_boosted) > 1e-14:
-            H_boosted = H_rest * (l_0_rest / l_0_boosted)**2
-        else:
-            H_boosted = H_rest
-
-        return H_boosted, l_spatial_boosted
+        return g_00, g_0i, g_ij, H, l_0, l_spatial
 
     def gamma(self, x: float, y: float, z: float) -> np.ndarray:
         """
-        Compute boosted 3-metric γ_ij = δ_ij + 2H l_i l_j.
-        """
-        H_rest, l_rest, _ = self._get_rest_frame_H_and_l(x, y, z)
-        H, l = self._boost_H_and_l(H_rest, l_rest)
+        Compute boosted 3-metric γ_ij from full 4-metric decomposition.
 
-        return np.eye(3) + 2 * H * np.outer(l, l)
+        The 3-metric is just g_ij for this coordinate choice.
+        """
+        _, _, g_ij, _, _, _ = self._get_4metric_components(x, y, z)
+        return g_ij
 
     def gamma_inv(self, x: float, y: float, z: float) -> np.ndarray:
         """
         Compute inverse boosted 3-metric.
-        """
-        H_rest, l_rest, _ = self._get_rest_frame_H_and_l(x, y, z)
-        H, l = self._boost_H_and_l(H_rest, l_rest)
 
-        return np.eye(3) - (2 * H / (1 + 2 * H)) * np.outer(l, l)
+        For γ_ij = δ_ij + 2H l_i l_j, the inverse is:
+        γ^ij = δ^ij - 2H/(1 + 2H|l|²) l^i l^j
+        """
+        _, _, g_ij, H, _, l_spatial = self._get_4metric_components(x, y, z)
+
+        # |l|² = l_i l^i (using flat space to raise)
+        l_sq = np.dot(l_spatial, l_spatial)
+
+        return np.eye(3) - (2 * H / (1 + 2 * H * l_sq)) * np.outer(l_spatial, l_spatial)
 
     def dgamma(self, x: float, y: float, z: float) -> np.ndarray:
         """
@@ -204,13 +212,7 @@ class BoostedMetric(Metric):
             (x, y, z + h), (x, y, z - h)
         ]
 
-        # Note: using self.gamma directly would cause recursion
-        # We need to compute the 3-metric at each point
-        gammas = []
-        for cx, cy, cz in coords:
-            H_rest, l_rest, _ = self._get_rest_frame_H_and_l(cx, cy, cz)
-            H, l = self._boost_H_and_l(H_rest, l_rest)
-            gammas.append(np.eye(3) + 2 * H * np.outer(l, l))
+        gammas = [self.gamma(*c) for c in coords]
 
         dgamma[0] = (gammas[0] - gammas[1]) / (2 * h)
         dgamma[1] = (gammas[2] - gammas[3]) / (2 * h)
@@ -218,25 +220,78 @@ class BoostedMetric(Metric):
 
         return dgamma
 
+    def _dgamma_dt(self, x: float, y: float, z: float) -> np.ndarray:
+        """
+        Compute ∂_t γ_ij for the boosted metric.
+
+        The boosted black hole is moving, so the metric is time-dependent.
+        At time t, the black hole center is at position (v*t, 0, 0).
+        We compute the time derivative numerically.
+        """
+        dt = 1e-6
+        v = self.velocity
+
+        def gamma_at_time(t):
+            """Compute 3-metric as if black hole center is at (v*t, 0, 0)."""
+            # Position relative to black hole at time t
+            x_rel = x - v[0] * t
+            y_rel = y - v[1] * t
+            z_rel = z - v[2] * t
+
+            # Transform to rest frame
+            if self.v_mag < 1e-14:
+                x_rest, y_rest, z_rest = x_rel, y_rel, z_rel
+            else:
+                pos_rel = np.array([x_rel, y_rel, z_rel])
+                pos_parallel = np.dot(pos_rel, self.n_hat) * self.n_hat
+                pos_perp = pos_rel - pos_parallel
+                pos_rest = pos_perp + self.lorentz_gamma * pos_parallel
+                x_rest, y_rest, z_rest = pos_rest
+
+            # Get H and l in rest frame
+            r_rest = np.sqrt(x_rest**2 + y_rest**2 + z_rest**2)
+            if r_rest < 1e-14:
+                r_rest = 1e-14
+
+            if hasattr(self.base_metric, '_r_and_l'):
+                r, l_rest = self.base_metric._r_and_l(x_rest, y_rest, z_rest)
+                if hasattr(self.base_metric, '_H'):
+                    if hasattr(self.base_metric, 'a'):  # Kerr
+                        H = self.base_metric._H(r, z_rest)
+                    else:  # Schwarzschild
+                        H = self.base_metric._H(r)
+                else:
+                    H = self.base_metric.M / r
+            else:
+                H = self.base_metric.M / r_rest
+                l_rest = np.array([x_rest, y_rest, z_rest]) / r_rest
+
+            # Boost l to lab frame
+            l_0, l_spatial = self._boost_4vector(1.0, l_rest)
+
+            # 3-metric
+            return np.eye(3) + 2 * H * np.outer(l_spatial, l_spatial)
+
+        # Numerical time derivative
+        gamma_minus = gamma_at_time(-dt)
+        gamma_plus = gamma_at_time(dt)
+        return (gamma_plus - gamma_minus) / (2 * dt)
+
     def extrinsic_curvature(self, x: float, y: float, z: float) -> np.ndarray:
         """
         Compute extrinsic curvature K_ij in the boosted frame.
 
-        Uses the relation K_ij = -(1/2α)(D_i β_j + D_j β_i) for
-        stationary spacetimes.
+        For a non-stationary spacetime (boosted black hole is moving):
+        K_ij = (1/2α)(D_i β_j + D_j β_i - ∂_t γ_ij)
         """
         h = 1e-6
         alpha = self.lapse(x, y, z)
 
         # Get 3-metric and Christoffel at this point
-        gamma_down = np.eye(3)
-        H_rest, l_rest, _ = self._get_rest_frame_H_and_l(x, y, z)
-        H, l = self._boost_H_and_l(H_rest, l_rest)
-        gamma_down = np.eye(3) + 2 * H * np.outer(l, l)
-
+        gamma_down = self.gamma(x, y, z)
         chris = self.christoffel(x, y, z)
 
-        # Compute shift and its derivatives
+        # Compute shift and its lowered version
         beta = self.shift(x, y, z)
         beta_down = gamma_down @ beta
 
@@ -248,18 +303,14 @@ class BoostedMetric(Metric):
 
             # Plus direction
             xp, yp, zp = x + dx[0], y + dx[1], z + dx[2]
-            H_rest_p, l_rest_p, _ = self._get_rest_frame_H_and_l(xp, yp, zp)
-            H_p, l_p = self._boost_H_and_l(H_rest_p, l_rest_p)
-            gamma_p = np.eye(3) + 2 * H_p * np.outer(l_p, l_p)
-            beta_p = 2 * H_p * l_p / (1 + 2 * H_p)
+            gamma_p = self.gamma(xp, yp, zp)
+            beta_p = self.shift(xp, yp, zp)
             beta_down_p = gamma_p @ beta_p
 
             # Minus direction
             xm, ym, zm = x - dx[0], y - dx[1], z - dx[2]
-            H_rest_m, l_rest_m, _ = self._get_rest_frame_H_and_l(xm, ym, zm)
-            H_m, l_m = self._boost_H_and_l(H_rest_m, l_rest_m)
-            gamma_m = np.eye(3) + 2 * H_m * np.outer(l_m, l_m)
-            beta_m = 2 * H_m * l_m / (1 + 2 * H_m)
+            gamma_m = self.gamma(xm, ym, zm)
+            beta_m = self.shift(xm, ym, zm)
             beta_down_m = gamma_m @ beta_m
 
             d_beta_down[i_dir, :] = (beta_down_p - beta_down_m) / (2 * h)
@@ -272,26 +323,40 @@ class BoostedMetric(Metric):
                 for k in range(3):
                     D_beta[i, j] -= chris[k, i, j] * beta_down[k]
 
-        # K_ij = -(1/2α)(D_i β_j + D_j β_i)
-        K = -0.5 / alpha * (D_beta + D_beta.T)
+        # Time derivative of 3-metric (non-zero for boosted/moving black hole)
+        dgamma_dt = self._dgamma_dt(x, y, z)
+
+        # K_ij = (1/2α)(D_i β_j + D_j β_i - ∂_t γ_ij)
+        K = 0.5 / alpha * (D_beta + D_beta.T - dgamma_dt)
 
         return K
 
     def lapse(self, x: float, y: float, z: float) -> float:
         """
-        Compute lapse α = 1/√(1 + 2H) in boosted frame.
+        Compute lapse α from 4-metric decomposition.
+
+        For Kerr-Schild: α² = 1/(1 + 2H l_0²)
         """
-        H_rest, l_rest, _ = self._get_rest_frame_H_and_l(x, y, z)
-        H, _ = self._boost_H_and_l(H_rest, l_rest)
-        return 1.0 / np.sqrt(1 + 2 * H)
+        _, _, _, H, l_0, _ = self._get_4metric_components(x, y, z)
+        return 1.0 / np.sqrt(1 + 2 * H * l_0 * l_0)
 
     def shift(self, x: float, y: float, z: float) -> np.ndarray:
         """
-        Compute shift β^i = 2H l^i / (1 + 2H) in boosted frame.
+        Compute shift β^i from 4-metric decomposition.
+
+        β_i = g_{0i} = 2H l_0 l_i
+        β^i = γ^{ij} β_j
         """
-        H_rest, l_rest, _ = self._get_rest_frame_H_and_l(x, y, z)
-        H, l = self._boost_H_and_l(H_rest, l_rest)
-        return 2 * H * l / (1 + 2 * H)
+        _, g_0i, _, H, l_0, l_spatial = self._get_4metric_components(x, y, z)
+
+        # β_i = g_0i = 2H l_0 l_i
+        beta_down = g_0i
+
+        # Raise with inverse 3-metric
+        gamma_inv = self.gamma_inv(x, y, z)
+        beta_up = gamma_inv @ beta_down
+
+        return beta_up
 
 
 def boost_metric(base_metric: Metric, velocity: np.ndarray) -> BoostedMetric:

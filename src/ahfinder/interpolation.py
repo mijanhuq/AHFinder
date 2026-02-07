@@ -37,6 +37,40 @@ def lagrange_weights(x: float, x_nodes: np.ndarray) -> np.ndarray:
     return weights
 
 
+def lagrange_derivative_weights(x: float, x_nodes: np.ndarray) -> np.ndarray:
+    """
+    Compute Lagrange interpolation derivative weights.
+
+    For the Lagrange basis polynomial L_i(x), the derivative is:
+    L'_i(x) = Σ_{k≠i} [Π_{j≠i,k} (x - x_j) / (x_i - x_j)]
+
+    Args:
+        x: Point at which to compute derivative
+        x_nodes: Array of node positions
+
+    Returns:
+        Array of weights w'_i such that f'(x) ≈ Σ w'_i f(x_i)
+    """
+    n = len(x_nodes)
+    deriv_weights = np.zeros(n)
+
+    for i in range(n):
+        # Compute L'_i(x)
+        for k in range(n):
+            if k == i:
+                continue
+            # This term contributes: Π_{j≠i,k} (x - x_j) / (x_i - x_j)
+            term = 1.0
+            for j in range(n):
+                if j != i:
+                    term /= (x_nodes[i] - x_nodes[j])
+                    if j != k:
+                        term *= (x - x_nodes[j])
+            deriv_weights[i] += term
+
+    return deriv_weights
+
+
 def lagrange_weights_vectorized(x_arr: np.ndarray, x_nodes: np.ndarray) -> np.ndarray:
     """
     Compute Lagrange interpolation weights for multiple query points.
