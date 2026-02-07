@@ -33,19 +33,22 @@ A complete Python implementation of an apparent horizon finder for black hole sp
 
 ![Flow of prompts used in this work](doc/assets/Gemini_Pro_FlowDiagram.png)
 
-### Key Best Practice
+### Key Best Practices
 
-> **Always test that mathematical identities hold.**
-
-The bug in the sparse Jacobian would have been caught immediately by a simple test:
-```python
-# Jacobian row sums should equal dF/dr for uniform perturbation
-row_sums = J.sum(axis=1)
-dF_dr = (F(r + eps) - F(r)) / eps
-assert np.allclose(row_sums, dF_dr)  # This failed! Row sums were negative!
-```
-
-This test revealed that the sparse Jacobian was dropping entries with values as large as 15.7—completely corrupting the Newton direction.
+When working with Claude there are a number of best practices one needs to follow:
+* Requests should be put together in a bit-sized chunks where you and Claude are iterating. If you are getting Claude to jump right in and work, then the request should be short and even better yet with a success criteria. You review and if all good then go to the next. If not all good, then iterate with Claude till you get it right.
+* Alternatively, a better practice is to ask Claude to propose a plan and you review the plan. Ask Claude to break the work down into chunks. Then once you agree then proceed. This is the approach I took in this project.
+* At each prompt, have a success criteria. Better yet, ask Claude to create a test and put it into a test folder. Something you can ask Claude to rerun to validate any future changes. Just as you would with test-driven development.
+* Ask Claude to create a folder structure. Use Claude.md to enforce structurions or constraints. we did that in this project.
+* Create a tests/ folder and critical to ask Claude to add tests along the way.
+* Just as a human developer such as you or perhaps a graduate student or a junior developer must, if something quantitative is implemented ensure that it is numerically correct. Have Claude write tests and carefully review. 
+* Claude will sometime detect that tests are failing or the trends in a graph look wrong and may suggest a fix before you even see it. 
+* Set the Claude context to make the LLM watch out for errors.
+* Bottom line, test thoroughly. In this case, where we use finite differencing, convergence test, test, test test...
+* Claude will use these tests to find bugs. In our case, we found some key bugs as a result of the tests. 
+* Claude will suggest alternate approaches than what was used in the original paper (in our example). Specify if you want that. Here given we are reimplementing 26+ year old algorithms, I gave Claude some leeway and it was good in its suggestions. Always review, review, review
+* Claude makes a choice of code implementation - it is not always the most generic and often directed code rather than reuseable extendable code. Watch for this and set the context to have it write reuseable code. 
+* At the end of each session hav Claude save its context. In my case, I use Journal.md to save all prompts and responses. I use Claude.md to enforce this. Claude can and will lose context session to session and it can and will go down the same rabbit holes if you are not there to remind it.
 
 ## Repository Structure
 
