@@ -16,8 +16,6 @@ A complete Python implementation of an apparent horizon finder for black hole sp
 
 
 <img src="doc/assets/Cartoon_Gemini_Pro_Part1.png" width="200" />
-
-
 <img src="doc/assets/Cartoon_Gemini_Pro_Part2.png" width="200" />
 
 ### The Journey (from [Journal.md](Journal.md))
