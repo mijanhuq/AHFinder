@@ -44,7 +44,7 @@ When working with Claude there are a number of best practices one needs to follo
 * Just as a human developer such as you or perhaps a graduate student or a junior developer must, if something quantitative is implemented ensure that it is numerically correct. Have Claude write tests and carefully review. 
 * Claude will sometime detect that tests are failing or the trends in a graph look wrong and may suggest a fix before you even see it. 
 * Set the Claude context to make the LLM watch out for errors.
-* Bottom line, test thoroughly. In this case, where we use finite differencing, convergence test, test, test test...
+* Bottom line, test thoroughly. In this case, where we use finite differencing, convergence test, test, test test... See [doc/ImplementationTests.md](doc/ImplementationTests.md).
 * Claude will use these tests to find bugs. In our case, we found some key bugs as a result of the tests. 
 * Claude will suggest alternate approaches than what was used in the original paper (in our example). Specify if you want that. Here given we are reimplementing 26+ year old algorithms, I gave Claude some leeway and it was good in its suggestions. Always review, review, review
 * Claude makes a choice of code implementation - it is not always the most generic and often directed code rather than reuseable extendable code. Watch for this and set the context to have it write reuseable code. 
