@@ -14,6 +14,12 @@ A complete Python implementation of an apparent horizon finder for black hole sp
 - Support for Schwarzschild, Kerr, and Lorentz-boosted black hole metrics
 - Comprehensive test suite with 27 verified tests
 
+
+<img src="doc/assets/Cartoon_Gemini_Pro_Part1.png" width="200" />
+
+
+<img src="doc/assets/Cartoon_Gemini_Pro_Part2.png" width="200" />
+
 ### The Journey (from [Journal.md](Journal.md))
 
 | Session | What Happened |
@@ -24,7 +30,9 @@ A complete Python implementation of an apparent horizon finder for black hole sp
 | **Documentation** | Created comprehensive test documentation with convergence graphs. |
 | **Debugging Round 2** | Discovered Newton solver only converged when starting very close to the solution. Diagnosed using row-sum test: sparse Jacobian was missing critical couplings (especially to poles). Fixed by switching to dense Jacobian. Basin of attraction expanded from r₀ ∈ [1.9, 2.0] to r₀ ∈ [1.0, 3.0]. |
 
-### Key Lesson Learned
+![Flow of prompts used in this work](doc/assets/Gemini_Pro_FlowDiagram.png)
+
+### Key Best Practice
 
 > **Always test that mathematical identities hold.**
 
