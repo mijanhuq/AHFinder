@@ -6,6 +6,11 @@ An implementation of the apparent horizon location algorithm from [Huq, Choptuik
 
 This repository represents an experiment in AI-assisted scientific computing. The goal was to recreate a numerical relativity algorithm that one of the authors (M. Huq) originally developed **30 years ago** during his PhD research—accomplished in a matter of **hours** through collaboration with Claude (Anthropic's AI assistant).
 
+<p float="left">
+  <img src="doc/assets/Cartoon_Gemini_Pro_Part1.png" width="200" />
+  <img src="doc/assets/Cartoon_Gemini_Pro_part2.png" width="200" /> 
+</p>
+
 ### What We Built
 
 A complete Python implementation of an apparent horizon finder for black hole spacetimes:
@@ -15,8 +20,6 @@ A complete Python implementation of an apparent horizon finder for black hole sp
 - Comprehensive test suite with 27 verified tests
 
 
-<img src="doc/assets/Cartoon_Gemini_Pro_Part1.png" width="200" />
-<img src="doc/assets/Cartoon_Gemini_Pro_part2.png" width="200" />
 
 ### The Journey (from [Journal.md](Journal.md))
 
@@ -28,7 +31,7 @@ A complete Python implementation of an apparent horizon finder for black hole sp
 | **Documentation** | Created comprehensive test documentation with convergence graphs. |
 | **Debugging Round 2** | Discovered Newton solver only converged when starting very close to the solution. Diagnosed using row-sum test: sparse Jacobian was missing critical couplings (especially to poles). Fixed by switching to dense Jacobian. Basin of attraction expanded from r₀ ∈ [1.9, 2.0] to r₀ ∈ [1.0, 3.0]. |
 
-<img src="doc/assets/Gemini_Pro_FlowDiagram.png" width="200" />
+![Flow of prompts used in this work](doc/assets/Gemini_Pro_FlowDiagram.png)
 
 ### Key Best Practice
 
