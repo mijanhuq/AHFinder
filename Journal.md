@@ -483,6 +483,118 @@ Area invariance restored! x/y ratio converges toward expected value with resolut
 - **Initial condition sensitivity**: FIXED - converges from r₀ ∈ [1.0, 3.0]
 - **Jacobian**: Uses dense computation
 - **Performance**: Boosted metrics slower due to time derivative computation
-- **Next steps**:
-  - Optimize boosted metric performance (cache computations)
-  - Add higher-resolution validation tests
+- **Next steps**: ✓ COMPLETED - See Session 2026-02-07
+
+---
+
+## Session: 2026-02-07 - Fast Boosted Metric Implementation
+
+### Prompt: Implement Vectorization for Boosted Metrics
+
+**User Request**: Perform vectorization to speed up the boosted metric calculations.
+
+### Performance Problem
+
+The numerical boosted metric was very slow:
+- `extrinsic_curvature()`: 0.4ms per call (75% of metric operations)
+- Full horizon finding at N_s=13: ~60 seconds
+- N_s=33 tests: 30+ minutes (impractical)
+
+**Root cause**: Multiple levels of numerical differentiation:
+1. `dgamma()`: 6 calls to `gamma()`
+2. `_dgamma_dt()`: 2 more full metric evaluations
+3. `extrinsic_curvature()`: 6 calls for shift derivatives + christoffel computation
+
+### Solution: Analytical Derivatives
+
+Implemented `FastBoostedMetric` in `boosted_fast.py` with all derivatives computed analytically using the chain rule.
+
+**Key insight**: For Kerr-Schild metrics, everything is determined by H and l:
+- γ_ij = δ_ij + 2H l_i l_j
+
+So we can compute all derivatives analytically:
+- ∂H/∂x_rest = -H l_rest / r
+- ∂l_i/∂x_rest_j = (δ_ij - l_i l_j) / r
+- Transform to lab frame using Jacobian of coordinate transformation
+
+**Implementation details**:
+
+1. **`_get_rest_frame_quantities()`**: Computes H, l, and their derivatives in rest frame
+
+2. **`_boost_null_vector_derivatives()`**: Computes ∂l_0/∂x_lab and ∂l_i/∂x_lab using chain rule through boost
+
+3. **`_compute_all_quantities()`**: Computes all metric quantities in one pass:
+   - γ_ij, γ^ij from H and l
+   - ∂_k γ_ij analytically
+   - Christoffel symbols from dgamma
+   - α, β from 4-metric decomposition
+   - K_ij with analytical ∂_t γ_ij = -v^k ∂_k γ_ij
+
+4. **`CachedBoostedMetric`**: Caches quantities at last computed point
+
+### Results
+
+**Speedup achieved**:
+
+| Metric Type | N_s=13 Time | Speedup |
+|-------------|-------------|---------|
+| Numerical | 61.2s | 1x |
+| Fast | 10.9s | **5.6x** |
+
+**Accuracy verified**:
+- gamma: identical (diff = 0)
+- dgamma: diff = 1.8e-10 (numerical precision)
+- K_ij: diff = 5.2e-11 (numerical precision)
+- Area ratio: 0.9998 (Lorentz invariance maintained)
+
+### Tests Added
+
+Added new test class `TestFastBoostedMetric` with 6 tests:
+1. `test_fast_matches_numerical_gamma`
+2. `test_fast_matches_numerical_dgamma`
+3. `test_fast_matches_numerical_K`
+4. `test_fast_matches_numerical_lapse_shift`
+5. `test_cached_metric`
+6. `test_fast_boost_metric_function`
+
+Added new test class `TestFastBoostedHorizon` with 4 tests:
+1. `test_fast_horizon_converges`
+2. `test_fast_area_matches_numerical`
+3. `test_fast_area_invariance`
+4. `test_fast_is_faster`
+
+**All 83 tests passing.**
+
+### Files Modified
+
+1. `src/ahfinder/metrics/boosted_fast.py` - Rewrote with analytical derivatives
+2. `src/ahfinder/metrics/__init__.py` - Added exports for fast metric classes
+3. `tests/test_boosted.py` - Added 10 new tests
+4. `src/ahfinder/interpolation.py` - Added missing `lagrange_derivative_weights` function
+
+### Usage
+
+```python
+from ahfinder.metrics import SchwarzschildMetric
+from ahfinder.metrics.boosted_fast import fast_boost_metric
+
+base = SchwarzschildMetric(M=1.0)
+boosted = fast_boost_metric(base, velocity=[0.3, 0.0, 0.0])
+
+# Use just like regular metric
+finder = ApparentHorizonFinder(boosted, N_s=17)
+rho = finder.find(initial_radius=2.0, tol=1e-5)
+```
+
+---
+
+## Current Status
+
+- **Core algorithm**: Working correctly with O(h²) convergence
+- **Schwarzschild test**: PASSING
+- **Kerr test**: PASSING
+- **Boosted Schwarzschild**: PASSING (area ratio ~0.9999)
+- **Boosted Kerr**: PASSING (area ratio ~0.9996)
+- **Fast boosted metric**: IMPLEMENTED - 5.6x speedup
+- **Total tests**: 83 passing
+- **Performance**: Boosted horizon finding reduced from ~60s to ~11s at N_s=13

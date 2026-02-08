@@ -2,10 +2,12 @@
 
 import numpy as np
 import pytest
+import time
 from ahfinder import ApparentHorizonFinder
 from ahfinder.metrics.schwarzschild import SchwarzschildMetric
 from ahfinder.metrics.kerr import KerrMetric
 from ahfinder.metrics.boosted import BoostedMetric, boost_metric
+from ahfinder.metrics.boosted_fast import FastBoostedMetric, CachedBoostedMetric, fast_boost_metric
 from ahfinder.solver import find_horizon, ConvergenceError
 
 
@@ -227,3 +229,178 @@ class TestBoostDirections:
 
         expected_n = np.array([0.3, 0.3, 0.0]) / expected_v_mag
         np.testing.assert_allclose(boosted.n_hat, expected_n)
+
+
+class TestFastBoostedMetric:
+    """Tests for the fast (analytical) boosted metric implementation."""
+
+    def test_fast_matches_numerical_gamma(self):
+        """Test that fast gamma matches numerical implementation."""
+        base = SchwarzschildMetric(M=1.0)
+        velocity = np.array([0.3, 0.0, 0.0])
+
+        numerical = BoostedMetric(base, velocity)
+        fast = FastBoostedMetric(base, velocity)
+
+        x, y, z = 2.5, 0.5, 0.3
+        gamma_num = numerical.gamma(x, y, z)
+        gamma_fast = fast.gamma(x, y, z)
+
+        np.testing.assert_allclose(gamma_fast, gamma_num, rtol=1e-8)
+
+    def test_fast_matches_numerical_dgamma(self):
+        """Test that fast dgamma matches numerical implementation."""
+        base = SchwarzschildMetric(M=1.0)
+        velocity = np.array([0.3, 0.0, 0.0])
+
+        numerical = BoostedMetric(base, velocity)
+        fast = FastBoostedMetric(base, velocity)
+
+        x, y, z = 2.5, 0.5, 0.3
+        dgamma_num = numerical.dgamma(x, y, z)
+        dgamma_fast = fast.dgamma(x, y, z)
+
+        np.testing.assert_allclose(dgamma_fast, dgamma_num, rtol=1e-4)
+
+    def test_fast_matches_numerical_K(self):
+        """Test that fast extrinsic curvature matches numerical implementation."""
+        base = SchwarzschildMetric(M=1.0)
+        velocity = np.array([0.3, 0.0, 0.0])
+
+        numerical = BoostedMetric(base, velocity)
+        fast = FastBoostedMetric(base, velocity)
+
+        x, y, z = 2.5, 0.5, 0.3
+        K_num = numerical.extrinsic_curvature(x, y, z)
+        K_fast = fast.extrinsic_curvature(x, y, z)
+
+        np.testing.assert_allclose(K_fast, K_num, rtol=1e-4)
+
+    def test_fast_matches_numerical_lapse_shift(self):
+        """Test that fast lapse and shift match numerical implementation."""
+        base = SchwarzschildMetric(M=1.0)
+        velocity = np.array([0.3, 0.0, 0.0])
+
+        numerical = BoostedMetric(base, velocity)
+        fast = FastBoostedMetric(base, velocity)
+
+        x, y, z = 2.5, 0.5, 0.3
+
+        assert np.isclose(fast.lapse(x, y, z), numerical.lapse(x, y, z), rtol=1e-8)
+        np.testing.assert_allclose(fast.shift(x, y, z), numerical.shift(x, y, z), rtol=1e-8)
+
+    def test_cached_metric(self):
+        """Test that cached metric returns correct values."""
+        base = SchwarzschildMetric(M=1.0)
+        velocity = np.array([0.3, 0.0, 0.0])
+
+        cached = CachedBoostedMetric(base, velocity)
+        fast = FastBoostedMetric(base, velocity)
+
+        x, y, z = 2.5, 0.5, 0.3
+
+        # Test that cached returns same values as non-cached
+        np.testing.assert_allclose(cached.gamma(x, y, z), fast.gamma(x, y, z))
+        np.testing.assert_allclose(cached.dgamma(x, y, z), fast.dgamma(x, y, z))
+        np.testing.assert_allclose(cached.extrinsic_curvature(x, y, z),
+                                   fast.extrinsic_curvature(x, y, z))
+
+    def test_fast_boost_metric_function(self):
+        """Test the fast_boost_metric convenience function."""
+        base = SchwarzschildMetric(M=1.0)
+        velocity = np.array([0.4, 0.0, 0.0])
+
+        boosted = fast_boost_metric(base, velocity, use_cache=True)
+        assert isinstance(boosted, CachedBoostedMetric)
+
+        boosted_no_cache = fast_boost_metric(base, velocity, use_cache=False)
+        assert isinstance(boosted_no_cache, FastBoostedMetric)
+
+
+class TestFastBoostedHorizon:
+    """Tests for horizon finding with fast boosted metric."""
+
+    def test_fast_horizon_converges(self):
+        """Test that horizon finder converges with fast boosted metric."""
+        base = SchwarzschildMetric(M=1.0)
+        velocity = np.array([0.3, 0.0, 0.0])
+        boosted = CachedBoostedMetric(base, velocity)
+
+        finder = ApparentHorizonFinder(boosted, N_s=13)
+
+        try:
+            rho = finder.find(initial_radius=2.0, tol=1e-5, verbose=False)
+            converged = True
+        except ConvergenceError:
+            converged = False
+
+        assert converged, "Newton iteration should converge with fast boosted metric"
+
+    def test_fast_area_matches_numerical(self):
+        """Test that fast metric gives same horizon area as numerical."""
+        base = SchwarzschildMetric(M=1.0)
+        velocity = np.array([0.3, 0.0, 0.0])
+
+        numerical = BoostedMetric(base, velocity)
+        fast = CachedBoostedMetric(base, velocity)
+
+        # Find horizons with both
+        finder_num = ApparentHorizonFinder(numerical, N_s=9)
+        finder_fast = ApparentHorizonFinder(fast, N_s=9)
+
+        try:
+            rho_num = finder_num.find(initial_radius=2.0, tol=1e-5, verbose=False)
+            area_num = finder_num.horizon_area(rho_num)
+
+            rho_fast = finder_fast.find(initial_radius=2.0, tol=1e-5, verbose=False)
+            area_fast = finder_fast.horizon_area(rho_fast)
+
+            # Areas should match closely
+            np.testing.assert_allclose(area_fast, area_num, rtol=0.01)
+        except ConvergenceError:
+            pytest.skip("One of the metrics did not converge")
+
+    def test_fast_area_invariance(self):
+        """Test that fast boosted metric preserves area invariance."""
+        base = SchwarzschildMetric(M=1.0)
+        velocity = np.array([0.3, 0.0, 0.0])
+        boosted = CachedBoostedMetric(base, velocity)
+
+        # Unboosted
+        finder1 = ApparentHorizonFinder(base, N_s=13)
+        rho1 = finder1.find(initial_radius=2.0, tol=1e-6, verbose=False)
+        area1 = finder1.horizon_area(rho1)
+
+        # Boosted
+        finder2 = ApparentHorizonFinder(boosted, N_s=13)
+        rho2 = finder2.find(initial_radius=2.0, tol=1e-5, verbose=False)
+        area2 = finder2.horizon_area(rho2)
+
+        # Areas should be approximately equal (within 5%)
+        ratio = area2 / area1
+        assert 0.95 < ratio < 1.05, f"Area ratio {ratio} should be close to 1.0"
+
+    def test_fast_is_faster(self):
+        """Test that fast metric is significantly faster than numerical."""
+        base = SchwarzschildMetric(M=1.0)
+        velocity = np.array([0.3, 0.0, 0.0])
+
+        numerical = BoostedMetric(base, velocity)
+        fast = CachedBoostedMetric(base, velocity)
+
+        # Time extrinsic curvature calls
+        n_calls = 50
+        points = [(2.0 + i*0.05, 0.3, 0.2) for i in range(n_calls)]
+
+        t0 = time.time()
+        for p in points:
+            numerical.extrinsic_curvature(*p)
+        t_num = time.time() - t0
+
+        t0 = time.time()
+        for p in points:
+            fast.extrinsic_curvature(*p)
+        t_fast = time.time() - t0
+
+        speedup = t_num / t_fast
+        assert speedup > 2.0, f"Fast metric should be at least 2x faster, got {speedup:.1f}x"

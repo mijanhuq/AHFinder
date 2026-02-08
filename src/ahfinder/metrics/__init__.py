@@ -9,6 +9,7 @@ from .base import Metric
 from .schwarzschild import SchwarzschildMetric
 from .kerr import KerrMetric
 from .boosted import BoostedMetric
+from .boosted_fast import FastBoostedMetric, CachedBoostedMetric, fast_boost_metric
 from .numerical import NumericalMetric
 
 __all__ = [
@@ -16,5 +17,8 @@ __all__ = [
     "SchwarzschildMetric",
     "KerrMetric",
     "BoostedMetric",
+    "FastBoostedMetric",
+    "CachedBoostedMetric",
+    "fast_boost_metric",
     "NumericalMetric",
 ]

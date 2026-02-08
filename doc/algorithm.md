@@ -127,6 +127,29 @@ The Kerr-Schild form is preserved under Lorentz boosts. Under a boost with veloc
 - The horizon becomes Lorentz contracted in the boost direction
 - The horizon area is an invariant
 
+**Important**: A boosted black hole is **not stationary** in the lab frame—it's moving. The extrinsic curvature formula must include the time derivative of the 3-metric:
+
+$$K_{ij} = \frac{1}{2\alpha}\left(D_i \beta_j + D_j \beta_i - \partial_t \gamma_{ij}\right)$$
+
+Since the black hole center moves with velocity $\vec{v}$, the time derivative can be computed analytically:
+
+$$\partial_t \gamma_{ij} = -v^k \partial_k \gamma_{ij}$$
+
+### Fast Boosted Metric Implementation
+
+The `FastBoostedMetric` class provides optimized boosted metric computations using analytical derivatives instead of numerical differentiation, achieving ~5x speedup.
+
+**Key optimizations**:
+
+1. **Analytical derivatives via chain rule**: All derivatives are computed through the boost transformation:
+   - $\partial_k H$ in lab frame from rest frame derivatives
+   - $\partial_k l_i$ from boosted null vector derivatives
+   - $\partial_k \gamma_{ij} = 2(\partial_k H) l_i l_j + 2H(\partial_k l_i)l_j + 2H l_i(\partial_k l_j)$
+
+2. **Analytical time derivative**: Uses $\partial_t \gamma_{ij} = -v^k \partial_k \gamma_{ij}$ (exact for moving black hole)
+
+3. **Point caching**: `CachedBoostedMetric` caches all quantities at the most recently computed point, avoiding redundant calculations when multiple metric quantities are needed at the same location
+
 ## Convergence Properties
 
 - **Interpolation**: $O(h^4)$

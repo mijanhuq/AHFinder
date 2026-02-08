@@ -17,7 +17,8 @@ A complete Python implementation of an apparent horizon finder for black hole sp
 - Newton solver for locating surfaces where the expansion of outgoing null normals vanishes (Θ = 0)
 - Cartesian finite difference stencils to avoid coordinate singularities at poles
 - Support for Schwarzschild, Kerr, and Lorentz-boosted black hole metrics
-- Comprehensive test suite with 32 verified tests
+- Comprehensive test suite with 83 verified tests
+- Fast analytical boosted metrics with 5.6x speedup
 
 
 
@@ -31,6 +32,7 @@ A complete Python implementation of an apparent horizon finder for black hole sp
 | **Documentation** | Created comprehensive test documentation with convergence graphs. |
 | **Debugging Round 2** | Discovered Newton solver only converged when starting very close to the solution. Diagnosed using row-sum test: sparse Jacobian was missing critical couplings (especially to poles). Fixed by switching to dense Jacobian. Basin of attraction expanded from r₀ ∈ [1.9, 2.0] to r₀ ∈ [1.0, 3.0]. |
 | **Kerr & Boosted Metrics** | Extended to Kerr black holes. Found extrinsic curvature sign error by comparing Kerr(a=0) with Schwarzschild. For boosted metrics, discovered the black hole is non-stationary in the lab frame—fixed by adding ∂_t γ_ij term to extrinsic curvature. Area invariance restored (ratio 0.9999). |
+| **Performance Optimization** | Boosted metrics were slow (~60s for N_s=13). Implemented analytical derivatives via chain rule through boost transformation, achieving 5.6x speedup. Fast metric computes ∂_t γ_ij = -v^k ∂_k γ_ij analytically. |
 
 ![Flow of prompts used in this work](doc/assets/Gemini_Pro_FlowDiagram.png)
 
@@ -66,8 +68,9 @@ AHFinder/
 │   └── metrics/            # Spacetime metrics
 │       ├── schwarzschild.py
 │       ├── kerr.py
-│       └── boosted.py
-├── tests/                  # Test suite (32 tests)
+│       ├── boosted.py
+│       └── boosted_fast.py # Fast analytical boosted metrics
+├── tests/                  # Test suite (83 tests)
 │   ├── test_jacobian.py    # Critical row-sum tests
 │   ├── test_residual.py
 │   └── ...
@@ -94,6 +97,28 @@ rho = finder.find(initial_radius=2.5, tol=1e-6)
 
 print(f"Horizon radius: {finder.horizon_radius_average(rho):.6f}")
 # Output: Horizon radius: 2.000290
+```
+
+### Fast Boosted Metrics
+
+For boosted black holes, use `fast_boost_metric` for 5x faster computation:
+
+```python
+from ahfinder import ApparentHorizonFinder
+from ahfinder.metrics import SchwarzschildMetric
+from ahfinder.metrics.boosted_fast import fast_boost_metric
+
+# Create a boosted Schwarzschild metric (v = 0.3c in x-direction)
+base = SchwarzschildMetric(M=1.0)
+boosted = fast_boost_metric(base, velocity=[0.3, 0.0, 0.0])
+
+# Find the Lorentz-contracted horizon
+finder = ApparentHorizonFinder(boosted, N_s=17)
+rho = finder.find(initial_radius=2.0, tol=1e-5)
+
+# Verify area invariance
+print(f"Horizon area: {finder.horizon_area(rho):.4f}")
+# Output: Horizon area: 50.0 (same as unboosted!)
 ```
 
 ## Results

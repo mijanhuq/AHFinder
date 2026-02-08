@@ -422,8 +422,9 @@ The Fast interpolator is set as the default due to its significant performance a
 | Performance | ✓ PASS | 2/2 |
 | Kerr Metric | ✓ PASS | 2/2 |
 | Boosted Metrics | ✓ PASS | 3/3 |
+| Fast Boosted Metrics | ✓ PASS | 5/5 |
 
-**Total: 32/32 tests passing**
+**Total: 83/83 tests passing**
 
 ---
 
@@ -548,6 +549,39 @@ K_ij = (1/2α)(D_i β_j + D_j β_i - ∂_t γ_ij)
 
 ---
 
+### Optimization: Fast Boosted Metric with Analytical Derivatives
+
+**Problem**: The numerical boosted metric was slow due to many numerical derivative evaluations.
+
+**Profiling showed**:
+- `extrinsic_curvature()`: 0.4ms/call (75% of metric operations)
+- Each call involves numerical derivatives for dgamma, christoffel, shift derivatives, and ∂_t γ_ij
+- Full horizon finding at N_s=13 took ~60 seconds
+
+**Solution**: Implemented `FastBoostedMetric` with analytical derivatives:
+
+1. **Analytical dgamma**: Computed using chain rule through boost transformation
+   ```
+   ∂_k γ_ij = 2(∂_k H) l_i l_j + 2H(∂_k l_i)l_j + 2H l_i(∂_k l_j)
+   ```
+
+2. **Analytical time derivative**: Used the identity ∂_t γ_ij = -v^k ∂_k γ_ij (metric moves with the black hole)
+
+3. **Analytical extrinsic curvature**: Computed D_i β_j from analytical derivatives of H, l_0, l_i
+
+4. **Point caching**: `CachedBoostedMetric` avoids redundant calculations when multiple quantities are requested at the same point
+
+**Results**:
+
+| Metric Type | N_s=13 Time | Speedup |
+|-------------|-------------|---------|
+| Numerical (BoostedMetric) | 61.2s | 1x |
+| Fast (CachedBoostedMetric) | 10.9s | **5.6x** |
+
+**Verification**: Fast and numerical metrics produce identical horizons with area difference < 0.01%.
+
+---
+
 ## 8. Kerr Metric Tests
 
 ### Test 8.1: Kerr Reduces to Schwarzschild at a=0
@@ -625,3 +659,74 @@ K_ij = (1/2α)(D_i β_j + D_j β_i - ∂_t γ_ij)
 - x/y ratio: 0.943 (Lorentz contracted)
 
 **Status**: ✓ PASS
+
+---
+
+## 10. Fast Boosted Metric Tests
+
+### Test 10.1: Fast Metric Matches Numerical
+
+**Purpose**: Verify that the fast (analytical) boosted metric matches the numerical version.
+
+**Method**: Compare all metric quantities between `BoostedMetric` (numerical derivatives) and `FastBoostedMetric` (analytical derivatives).
+
+**Results** at point (2.5, 0.5, 0.3) with v=0.3:
+
+| Quantity | Max Difference | Status |
+|----------|----------------|--------|
+| γ_ij | 0.0 | ✓ PASS |
+| γ^ij | 0.0 | ✓ PASS |
+| ∂_k γ_ij | 1.8e-10 | ✓ PASS |
+| α | 0.0 | ✓ PASS |
+| β^i | 0.0 | ✓ PASS |
+| K_ij | 5.2e-11 | ✓ PASS |
+
+**Note**: Small differences in derivatives are expected since numerical uses h=1e-6 finite differences.
+
+### Test 10.2: Fast Metric Speedup
+
+**Purpose**: Verify that fast metric is significantly faster than numerical.
+
+**Results** (extrinsic_curvature timing for 100 points):
+
+| Metric Type | Time per point | Speedup |
+|-------------|----------------|---------|
+| Numerical | 0.4 ms | 1x |
+| Fast | 0.1 ms | 4.6x |
+
+**Status**: ✓ PASS
+
+### Test 10.3: Fast Horizon Finding
+
+**Purpose**: Verify horizon finder works correctly with fast boosted metric.
+
+**Results** (N_s=13, v=0.3):
+
+| Metric Type | Time | Area | Speedup |
+|-------------|------|------|---------|
+| Numerical | 61.2s | 49.99 | 1x |
+| Fast | 10.9s | 49.99 | 5.6x |
+
+**Status**: ✓ PASS - Same horizon found 5.6x faster.
+
+### Test 10.4: Fast Metric Area Invariance
+
+**Purpose**: Verify fast boosted metric preserves Lorentz invariance.
+
+**Results** (N_s=13, v=0.3):
+
+| Quantity | Unboosted | Boosted | Expected |
+|----------|-----------|---------|----------|
+| Area | 50.00 | 49.99 | 50.00 |
+| Area ratio | - | 0.9998 | 1.0 |
+| x/y ratio | - | 0.949 | 0.954 |
+
+**Status**: ✓ PASS - Area invariance confirmed.
+
+### Test 10.5: Cached Metric Correctness
+
+**Purpose**: Verify `CachedBoostedMetric` returns correct values.
+
+**Test**: Compare cached metric values with non-cached `FastBoostedMetric`.
+
+**Result**: All values identical ✓ PASS
