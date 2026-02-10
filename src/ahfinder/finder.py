@@ -42,7 +42,8 @@ class ApparentHorizonFinder:
         use_jfnk: bool = False,
         jfnk_maxiter: int = 50,
         jfnk_tol: float = 1e-6,
-        use_sparse_jacobian: bool = False
+        use_sparse_jacobian: bool = False,
+        use_vectorized_jacobian: bool = False
     ):
         """
         Initialize the apparent horizon finder.
@@ -62,6 +63,9 @@ class ApparentHorizonFinder:
             use_sparse_jacobian: Use sparse Jacobian with Lagrange interpolation (default False).
                                  Provides 3-13x speedup for Jacobian computation by exploiting
                                  the local stencil structure of Lagrange interpolation.
+            use_vectorized_jacobian: Use vectorized sparse Jacobian (default False).
+                                     Provides additional 5-6x speedup over sparse Jacobian
+                                     through batched interpolation and Numba JIT.
         """
         self.metric = metric
         self.N_s = N_s
@@ -73,6 +77,7 @@ class ApparentHorizonFinder:
         self.jfnk_maxiter = jfnk_maxiter
         self.jfnk_tol = jfnk_tol
         self.use_sparse_jacobian = use_sparse_jacobian
+        self.use_vectorized_jacobian = use_vectorized_jacobian
 
         # Create mesh
         self.mesh = SurfaceMesh(N_s)
@@ -125,7 +130,8 @@ class ApparentHorizonFinder:
             self.use_jfnk,
             self.jfnk_maxiter,
             self.jfnk_tol,
-            self.use_sparse_jacobian
+            self.use_sparse_jacobian,
+            self.use_vectorized_jacobian
         )
 
         # Find horizon

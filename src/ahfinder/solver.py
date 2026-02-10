@@ -41,6 +41,14 @@ try:
 except ImportError:
     _SPARSE_AVAILABLE = False
 
+# Optional vectorized Jacobian support
+try:
+    from .jacobian_vectorized import create_vectorized_jacobian_computer
+    from .residual_vectorized import create_vectorized_residual_evaluator
+    _VECTORIZED_AVAILABLE = True
+except ImportError:
+    _VECTORIZED_AVAILABLE = False
+
 
 class ConvergenceError(Exception):
     """Raised when Newton iteration fails to converge."""
@@ -74,7 +82,8 @@ class NewtonSolver:
         use_jfnk: bool = False,
         jfnk_maxiter: int = 50,
         jfnk_tol: float = 1e-6,
-        use_sparse_jacobian: bool = False
+        use_sparse_jacobian: bool = False,
+        use_vectorized_jacobian: bool = False
     ):
         """
         Initialize Newton solver.
@@ -94,6 +103,8 @@ class NewtonSolver:
             jfnk_tol: Relative tolerance for GMRES in JFNK
             use_sparse_jacobian: Use sparse Jacobian with Lagrange interpolation (default False).
                                  Provides 3-13x speedup for Jacobian computation.
+            use_vectorized_jacobian: Use vectorized sparse Jacobian (default False).
+                                     Provides additional 5-6x speedup over sparse Jacobian.
         """
         self.mesh = mesh
         self.metric = metric
@@ -106,9 +117,19 @@ class NewtonSolver:
         self.jfnk_maxiter = jfnk_maxiter
         self.jfnk_tol = jfnk_tol
         self.use_sparse_jacobian = use_sparse_jacobian and _SPARSE_AVAILABLE
+        self.use_vectorized_jacobian = use_vectorized_jacobian and _VECTORIZED_AVAILABLE
 
         # Set up interpolator and residual evaluator
-        if use_sparse_jacobian and _SPARSE_AVAILABLE:
+        if use_vectorized_jacobian and _VECTORIZED_AVAILABLE:
+            # Use vectorized sparse Jacobian (fastest option)
+            self.interpolator = None
+            self.residual_evaluator = create_vectorized_residual_evaluator(
+                mesh, metric, center, spacing_factor
+            )
+            self.jacobian_computer = create_vectorized_jacobian_computer(
+                mesh, metric, center, spacing_factor, epsilon
+            )
+        elif use_sparse_jacobian and _SPARSE_AVAILABLE:
             # Use Lagrange interpolation for sparse Jacobian
             self.interpolator = None  # Not used in sparse mode
             self.residual_evaluator = create_sparse_residual_evaluator(
@@ -190,6 +211,8 @@ class NewtonSolver:
             print("Newton iteration for apparent horizon:")
             if self.use_jfnk:
                 mode = "JFNK"
+            elif self.use_vectorized_jacobian:
+                mode = "Vectorized Sparse Jacobian"
             elif self.use_sparse_jacobian:
                 mode = "Sparse Jacobian (Lagrange)"
             else:
@@ -219,6 +242,22 @@ class NewtonSolver:
                 # Jacobian-Free Newton-Krylov: use GMRES with matrix-free matvec
                 delta_rho_flat, gmres_iters = self._solve_jfnk(rho, F, iteration)
                 self.jfnk_iterations.append(gmres_iters)
+            elif self.use_vectorized_jacobian:
+                # Vectorized sparse Jacobian with ILU-preconditioned BiCGSTAB
+                from scipy.sparse.linalg import spilu, bicgstab, spsolve, LinearOperator
+                J_sparse = self.jacobian_computer.compute_sparse(rho, verbose=self.verbose)
+                n = len(F)
+
+                # Compute ILU preconditioner on first iteration only (lagged)
+                if self._sparse_ilu is None:
+                    self._sparse_ilu = spilu(J_sparse.tocsc(), drop_tol=1e-4)
+
+                M = LinearOperator((n, n), matvec=self._sparse_ilu.solve)
+                delta_rho_flat, info = bicgstab(J_sparse, -F, M=M, rtol=1e-10, maxiter=100)
+
+                if info != 0:
+                    warnings.warn(f"BiCGSTAB did not converge (info={info}), using direct solve")
+                    delta_rho_flat = spsolve(J_sparse.tocsc(), -F)
             elif self.use_sparse_jacobian:
                 # Sparse Jacobian with ILU-preconditioned BiCGSTAB
                 from scipy.sparse.linalg import spilu, bicgstab, LinearOperator

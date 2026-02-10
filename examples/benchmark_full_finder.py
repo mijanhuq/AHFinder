@@ -1,64 +1,48 @@
-#!/usr/bin/env python3
 """
-Benchmark full horizon finder with optimized vs original metric.
+Benchmark full horizon finding with vectorized residual evaluation.
 """
 
 import numpy as np
 import time
+from ahfinder import ApparentHorizonFinder
+from ahfinder.metrics.schwarzschild_fast import SchwarzschildMetricFast
 
-def benchmark_full_finder():
-    from ahfinder import ApparentHorizonFinder
-    from ahfinder.metrics.boosted_kerr_fast import FastBoostedKerrMetric
-    from ahfinder.metrics.boosted_kerr_fast_cached import FastBoostedKerrMetricCached
 
-    print("=" * 70)
-    print("Full Horizon Finder Benchmark")
-    print("=" * 70)
+def benchmark_finder(N_s: int, use_sparse: bool = True):
+    """Benchmark full horizon finding."""
+    print(f"\n{'='*60}")
+    print(f"Full horizon finding: N_s={N_s}, sparse_jacobian={use_sparse}")
+    print(f"{'='*60}")
 
-    velocity = np.array([0.3, 0.0, 0.0])
+    M = 1.0
+    metric = SchwarzschildMetricFast(M=M)
 
-    for N_s in [17, 25]:
-        print(f"\nN_s = {N_s}")
-        print("-" * 50)
+    finder = ApparentHorizonFinder(
+        metric, N_s=N_s,
+        use_sparse_jacobian=use_sparse
+    )
 
-        # Original metric
-        metric_orig = FastBoostedKerrMetric(M=1.0, a=0.5, velocity=velocity)
-        finder_orig = ApparentHorizonFinder(metric_orig, N_s=N_s)
+    # Time the full solve
+    t0 = time.time()
+    rho = finder.find(initial_radius=2.0, tol=1e-9, max_iter=20, verbose=True)
+    t_total = time.time() - t0
 
-        # Cached metric with fast single-call
-        metric_fast = FastBoostedKerrMetricCached(M=1.0, a=0.5, velocity=velocity)
-        finder_fast = ApparentHorizonFinder(metric_fast, N_s=N_s)
+    # Verify result
+    r_horizon = np.mean(rho)
+    expected = 2 * M
+    error = abs(r_horizon - expected) / expected
 
-        # Warm up JIT
-        print("Warming up JIT...")
-        _ = finder_orig.find(initial_radius=1.9, tol=1e-5, max_iter=10)
-        _ = finder_fast.find(initial_radius=1.9, tol=1e-5, max_iter=10)
+    print(f"\nResults:")
+    print(f"  Total time:       {t_total:.2f}s")
+    print(f"  Horizon radius:   {r_horizon:.6f} (expected {expected:.6f})")
+    print(f"  Relative error:   {error:.2e}")
 
-        # Benchmark original
-        n_runs = 3
-        times_orig = []
-        for _ in range(n_runs):
-            start = time.perf_counter()
-            rho = finder_orig.find(initial_radius=1.9, tol=1e-5, max_iter=20)
-            times_orig.append(time.perf_counter() - start)
-        t_orig = np.mean(times_orig)
+    return t_total, r_horizon
 
-        # Benchmark fast
-        times_fast = []
-        for _ in range(n_runs):
-            start = time.perf_counter()
-            rho = finder_fast.find(initial_radius=1.9, tol=1e-5, max_iter=20)
-            times_fast.append(time.perf_counter() - start)
-        t_fast = np.mean(times_fast)
-
-        print(f"\n{'Method':<35} {'Time (s)':>12} {'Speedup':>10}")
-        print("-" * 60)
-        print(f"{'Original FastBoostedKerrMetric':<35} {t_orig:>12.3f} {'1.0x':>10}")
-        print(f"{'Cached + single JIT call':<35} {t_fast:>12.3f} {t_orig/t_fast:>10.1f}x")
-
-    print("\n" + "=" * 70)
-    print("Summary")
-    print("=" * 70)
 
 if __name__ == "__main__":
-    benchmark_full_finder()
+    print("Benchmarking with current sparse Jacobian implementation")
+    print("="*60)
+
+    for N_s in [17, 21, 25]:
+        benchmark_finder(N_s, use_sparse=True)
