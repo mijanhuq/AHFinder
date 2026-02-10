@@ -18,6 +18,13 @@ from .stencil import CartesianStencil
 from .interpolation import BiquarticInterpolator
 from .metrics.base import Metric
 
+# Try to import fast JIT-compiled version
+try:
+    from .residual_fast import compute_expansion_fast
+    _USE_NUMBA = True
+except ImportError:
+    _USE_NUMBA = False
+
 
 def compute_expansion(
     grad_phi: np.ndarray,
@@ -70,16 +77,11 @@ def compute_expansion(
     # s^i = n^i / √ω (unit outward normal)
     s_up = n_up / sqrt_omega
 
-    # Compute Christoffel symbols Γ^k_{ij} from metric derivatives
+    # Compute Christoffel symbols Γ^k_{ij} from metric derivatives (vectorized)
     # Γ^k_{ij} = (1/2) γ^{kl} (∂_i γ_{lj} + ∂_j γ_{il} - ∂_l γ_{ij})
-    chris = np.zeros((3, 3, 3))
-    for k in range(3):
-        for i in range(3):
-            for j in range(3):
-                for l in range(3):
-                    chris[k, i, j] += 0.5 * gamma_inv[k, l] * (
-                        dgamma[i, l, j] + dgamma[j, i, l] - dgamma[l, i, j]
-                    )
+    # dgamma[k,i,j] = ∂_k γ_{ij}, so we transpose to get the right indices
+    bracket = dgamma.transpose(1, 0, 2) + dgamma.transpose(2, 1, 0) - dgamma
+    chris = 0.5 * np.einsum('kl,lij->kij', gamma_inv, bracket)
 
     # Contracted Christoffel: Γ^k = γ^{ij} Γ^k_{ij}
     Gamma_up = np.einsum('ij,kij->k', gamma_inv, chris)
@@ -202,11 +204,18 @@ class ResidualEvaluator:
         K_tensor = self.metric.extrinsic_curvature(x0, y0, z0)
         K_trace = self.metric.K_trace(x0, y0, z0)
 
-        return compute_expansion(
-            grad_phi, hess_phi,
-            gamma_inv, dgamma,
-            K_tensor, K_trace
-        )
+        if _USE_NUMBA:
+            return compute_expansion_fast(
+                grad_phi, hess_phi,
+                gamma_inv, dgamma,
+                K_tensor, K_trace
+            )
+        else:
+            return compute_expansion(
+                grad_phi, hess_phi,
+                gamma_inv, dgamma,
+                K_tensor, K_trace
+            )
 
     def evaluate(self, rho: np.ndarray) -> np.ndarray:
         """

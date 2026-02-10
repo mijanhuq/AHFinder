@@ -104,6 +104,23 @@ A sparse approximation that only considers local coupling in angular space will 
 
 The linear system $J \delta\rho = -F$ is solved using direct dense factorization (numpy.linalg.solve). For typical resolutions ($N_s = 9$ to $33$), the matrix size ($N_{indep} \times N_{indep}$) is small enough that dense solve is efficient.
 
+### 7. Jacobian-Free Newton-Krylov (Optional)
+
+For larger problems, a Jacobian-Free Newton-Krylov (JFNK) solver is available. Instead of computing the full Jacobian matrix, JFNK uses matrix-vector products computed via finite differences:
+
+$$J \mathbf{v} \approx \frac{F[\rho + \epsilon \mathbf{v}] - F[\rho]}{\epsilon}$$
+
+The linear system is solved iteratively using GMRES. To accelerate convergence, a lagged Jacobian preconditioner is used:
+- On the first Newton iteration, compute the full Jacobian and its LU factorization
+- Use this as a preconditioner for GMRES in subsequent iterations
+
+**Epsilon Scaling**: Following Knoll & Keyes (2004), the optimal perturbation is:
+$$\epsilon = \sqrt{\epsilon_{machine}} \cdot \frac{1 + \|\rho\|}{\|\mathbf{v}\|}$$
+
+This balances truncation error (favors larger ε) against roundoff error (favors smaller ε).
+
+**Performance Note**: The JFNK implementation includes a workaround for a subtle caching bug that requires re-evaluating $F[\rho]$ in each matvec call. This doubles the cost per GMRES iteration. For typical problem sizes ($N_s \leq 33$), the dense Jacobian approach is recommended.
+
 ## Kerr-Schild Metrics
 
 The algorithm is designed to work with Kerr-Schild metrics:

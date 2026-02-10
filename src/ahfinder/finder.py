@@ -38,7 +38,10 @@ class ApparentHorizonFinder:
         center: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         epsilon: float = 1e-5,
         spacing_factor: float = 0.5,
-        use_fast_interpolator: bool = True
+        use_fast_interpolator: bool = True,
+        use_jfnk: bool = False,
+        jfnk_maxiter: int = 50,
+        jfnk_tol: float = 1e-6
     ):
         """
         Initialize the apparent horizon finder.
@@ -50,6 +53,11 @@ class ApparentHorizonFinder:
             epsilon: Perturbation size for Jacobian computation
             spacing_factor: Cartesian stencil spacing factor
             use_fast_interpolator: Use SciPy-based fast interpolator (default True)
+            use_jfnk: Use Jacobian-Free Newton-Krylov solver (default False).
+                      JFNK avoids computing the full Jacobian, reducing
+                      complexity from O(n²) to O(n × k) where k is GMRES iterations.
+            jfnk_maxiter: Maximum GMRES iterations for JFNK
+            jfnk_tol: Relative tolerance for GMRES in JFNK
         """
         self.metric = metric
         self.N_s = N_s
@@ -57,6 +65,9 @@ class ApparentHorizonFinder:
         self.epsilon = epsilon
         self.spacing_factor = spacing_factor
         self.use_fast_interpolator = use_fast_interpolator
+        self.use_jfnk = use_jfnk
+        self.jfnk_maxiter = jfnk_maxiter
+        self.jfnk_tol = jfnk_tol
 
         # Create mesh
         self.mesh = SurfaceMesh(N_s)
@@ -105,7 +116,10 @@ class ApparentHorizonFinder:
             self.epsilon,
             self.spacing_factor,
             verbose,
-            self.use_fast_interpolator
+            self.use_fast_interpolator,
+            self.use_jfnk,
+            self.jfnk_maxiter,
+            self.jfnk_tol
         )
 
         # Find horizon

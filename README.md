@@ -17,8 +17,9 @@ A complete Python implementation of an apparent horizon finder for black hole sp
 - Newton solver for locating surfaces where the expansion of outgoing null normals vanishes (Θ = 0)
 - Cartesian finite difference stencils to avoid coordinate singularities at poles
 - Support for Schwarzschild, Kerr, and Lorentz-boosted black hole metrics
-- Comprehensive test suite with 83 verified tests
-- Fast analytical boosted metrics with 5.6x speedup
+- Comprehensive test suite with 108 verified tests
+- Fast analytical boosted metrics with Numba JIT compilation
+- Gallery of 18 horizon visualizations including diagonal boosts
 
 
 
@@ -33,6 +34,7 @@ A complete Python implementation of an apparent horizon finder for black hole sp
 | **Debugging Round 2** | Discovered Newton solver only converged when starting very close to the solution. Diagnosed using row-sum test: sparse Jacobian was missing critical couplings (especially to poles). Fixed by switching to dense Jacobian. Basin of attraction expanded from r₀ ∈ [1.9, 2.0] to r₀ ∈ [1.0, 3.0]. |
 | **Kerr & Boosted Metrics** | Extended to Kerr black holes. Found extrinsic curvature sign error by comparing Kerr(a=0) with Schwarzschild. For boosted metrics, discovered the black hole is non-stationary in the lab frame—fixed by adding ∂_t γ_ij term to extrinsic curvature. Area invariance restored (ratio 0.9999). |
 | **Performance Optimization** | Boosted metrics were slow (~60s for N_s=13). Implemented analytical derivatives via chain rule through boost transformation, achieving 5.6x speedup. Fast metric computes ∂_t γ_ij = -v^k ∂_k γ_ij analytically. |
+| **Numba JIT & FastBoostedKerrMetric** | Profiled and optimized with Numba JIT compilation. Created `FastBoostedKerrMetric` using semi-analytical approach: compute H, l numerically in rest frame, transform derivatives analytically to lab frame. Achieved 29x speedup on inner expansion loop, 2.5x overall speedup. Generated gallery of 18 horizon visualizations with varying spins and boost velocities including diagonal boosts. |
 
 ![Flow of prompts used in this work](doc/assets/Gemini_Pro_FlowDiagram.png)
 
@@ -63,21 +65,29 @@ AHFinder/
 │   ├── stencil.py          # 27-point Cartesian stencil
 │   ├── residual.py         # Expansion Θ computation
 │   ├── jacobian.py         # Numerical Jacobian
-│   ├── solver.py           # Newton iteration
+│   ├── solver.py           # Newton iteration (dense or JFNK)
 │   ├── finder.py           # High-level API
+│   ├── residual_fast.py    # Numba JIT expansion computation
 │   └── metrics/            # Spacetime metrics
 │       ├── schwarzschild.py
+│       ├── schwarzschild_fast.py  # Numba JIT Schwarzschild
 │       ├── kerr.py
+│       ├── kerr_analytical.py     # Kerr with analytical derivatives
 │       ├── boosted.py
-│       └── boosted_fast.py # Fast analytical boosted metrics
-├── tests/                  # Test suite (83 tests)
+│       ├── boosted_fast.py        # Fast analytical boosted metrics
+│       └── boosted_kerr_fast.py   # Semi-analytical boosted Kerr (Numba)
+├── tests/                  # Test suite (108 tests)
 │   ├── test_jacobian.py    # Critical row-sum tests
 │   ├── test_residual.py
+│   ├── test_boosted_kerr.py  # FastBoostedKerrMetric validation
 │   └── ...
 ├── doc/
 │   ├── algorithm.md        # Algorithm description
 │   ├── ImplementationTests.md  # Detailed test results & graphs
 │   └── graphs/             # Convergence plots
+├── gallery/                # Horizon visualizations
+│   ├── generate_gallery.py # Gallery generation script
+│   └── *.png               # 18 horizon images
 ├── examples/
 │   ├── find_horizon.py     # Basic usage
 │   └── visualize_horizon.py
@@ -121,6 +131,72 @@ print(f"Horizon area: {finder.horizon_area(rho):.4f}")
 # Output: Horizon area: 50.0 (same as unboosted!)
 ```
 
+### Fast Boosted Kerr (Numba JIT)
+
+For boosted Kerr black holes, use `FastBoostedKerrMetric` which uses a semi-analytical approach with Numba JIT compilation for optimal performance:
+
+```python
+from ahfinder import ApparentHorizonFinder
+from ahfinder.metrics.boosted_kerr_fast import FastBoostedKerrMetric
+import numpy as np
+
+# Create a boosted Kerr metric (a=0.5, v=0.3c in x-direction)
+metric = FastBoostedKerrMetric(M=1.0, a=0.5, velocity=np.array([0.3, 0.0, 0.0]))
+
+# Find the Lorentz-contracted horizon
+finder = ApparentHorizonFinder(metric, N_s=25)
+rho = finder.find(initial_radius=1.9, tol=1e-5)
+
+# Verify area invariance under boost
+print(f"Horizon area: {finder.horizon_area(rho):.4f}")
+# Matches unboosted Kerr area!
+```
+
+The `FastBoostedKerrMetric` computes H and l numerically in the rest frame, then transforms derivatives analytically to the lab frame using the Lorentz transformation. All core functions are JIT-compiled with Numba for 29x speedup on the inner expansion loop.
+
+### Solver Options
+
+Two solver modes are available:
+
+1. **Dense Jacobian** (default): Computes the full Jacobian matrix at each Newton iteration. Recommended for typical problem sizes (N_s ≤ 33).
+
+2. **Jacobian-Free Newton-Krylov (JFNK)**: Uses matrix-free GMRES with finite-difference matvec. May be useful for very large problems where O(n²) Jacobian storage is prohibitive.
+
+```python
+# Enable JFNK solver
+finder = ApparentHorizonFinder(
+    metric,
+    N_s=33,
+    use_jfnk=True,       # Use JFNK instead of dense Jacobian
+    jfnk_maxiter=100,    # Max GMRES iterations
+    jfnk_tol=1e-6        # GMRES tolerance
+)
+```
+
+### Performance Optimizations
+
+The codebase includes Numba JIT-compiled implementations for improved performance:
+
+| Optimization | Speedup | Notes |
+|-------------|---------|-------|
+| Vectorized Christoffel computation | 2-3x | Replaced nested loops with `einsum` |
+| Numba JIT for `compute_expansion` | 29x | Inner expansion calculation |
+| `SchwarzschildMetricFast` | 2.5x | JIT-compiled metric components |
+| `FastBoostedKerrMetric` | ~10x | Semi-analytical approach with JIT |
+
+To use the fast implementations:
+
+```python
+from ahfinder.metrics.schwarzschild_fast import SchwarzschildMetricFast
+from ahfinder.metrics.boosted_kerr_fast import FastBoostedKerrMetric
+
+# Use fast Schwarzschild metric
+metric = SchwarzschildMetricFast(M=1.0)
+
+# Use fast boosted Kerr metric
+metric = FastBoostedKerrMetric(M=1.0, a=0.5, velocity=np.array([0.3, 0.0, 0.0]))
+```
+
 ## Results
 
 The implementation successfully finds apparent horizons for:
@@ -128,15 +204,28 @@ The implementation successfully finds apparent horizons for:
 | Spacetime | Expected | Found | Error |
 |-----------|----------|-------|-------|
 | Schwarzschild (M=1) | r = 2.0 | r = 2.000 | < 0.1% |
-| Kerr (a=0.5) | r₊ = 1.866 | r = 1.897 | 1.7% |
-| Kerr (a=0.7) | r₊ = 1.714 | r = 1.750 | 2.1% |
+| Kerr (a=0.5) | R_eq = 1.932 | r = 1.932 | < 0.1% |
+| Kerr (a=0.7) | R_eq = 1.852 | r = 1.857 | < 0.3% |
 | Boosted Schwarzschild (v=0.3) | Lorentz contracted | ✓ | Area ratio: 0.9999 |
 | Boosted Kerr (a=0.5, v=0.3) | Lorentz contracted | ✓ | Area ratio: 0.9996 |
+| Boosted Kerr (a=0.5, v=0.6) | Lorentz contracted | ✓ | Area ratio: 0.9998 |
+
+*Note: R_eq = √(r₊² + a²) is the Cartesian equatorial radius, where r₊ is the Boyer-Lindquist event horizon radius.*
 
 **Key validations:**
 - Area invariance under Lorentz boosts confirmed (ratio ≈ 1.0)
 - Lorentz contraction observed (x/y ratio ≈ 0.95 for v=0.3)
 - All metrics converge in 3-7 Newton iterations
+
+### Gallery
+
+The `gallery/` directory contains 18 horizon visualizations showing Kerr black holes with varying spins and boost velocities:
+
+- **Spins**: a = 0, 0.25, 0.5, 0.75, 0.99
+- **Velocities**: v = 0, 0.3, 0.6 (x-direction)
+- **Diagonal boosts**: v = 0.3, 0.6 in (x+y)/√2 direction
+
+Run `python gallery/generate_gallery.py` to regenerate. Note: v=0.9 cases are skipped due to extreme Lorentz contraction making convergence challenging.
 
 See [doc/ImplementationTests.md](doc/ImplementationTests.md) for comprehensive test results, convergence studies, and validation graphs.
 
@@ -160,6 +249,8 @@ This project demonstrates capabilities beyond simple code generation. Here's wha
 
 5. **Profiling and Optimization**: Identified that `extrinsic_curvature()` took 75% of metric computation time, proposed and implemented vectorized alternatives.
 
+6. **Exploration of numerical techniques and other approaches** Claude can come back and propose alternate algorithms and then iterate on them. One interesting outcome is that it proposed GMRES. This was an angle I had explored when I first worked on this. I had the same experience with GMRES alone was slow. 
+
 ### What the Human Brought
 
 - **Recognizing "wrongness"**: Knowing that Newton should converge from r₀=2.5, that Kerr(a=0) must match Schwarzschild, that boosted area can't be 13% larger
@@ -167,7 +258,7 @@ This project demonstrates capabilities beyond simple code generation. Here's wha
 - **Strategic direction**: When to dig deeper vs. try a different approach
 - **Domain validation**: Is this physically reasonable? Does it match intuition from 30 years of experience?
 - **Architectural decisions**: What abstractions make sense? What's the right API?
-
+- **Pointing out approaches that the LLM might not have thought of** For example, in the evaluation of the boosted Kerr metric it was using numerical derivatives and that was slow. It did not try to improve that further and said symbolic manipulation was giving complex expressions. I then laid out an approach taking advantage of the Kerr-schild metric form. I asked it to use SageMath thereafer and it is on its way now. Bottom line, watch for possible simplifications or approaches that could boost Claude's work.
 ### The Collaboration Pattern
 
 The most effective pattern was **iterative refinement with physics constraints**:
@@ -194,6 +285,10 @@ This is genuine collaboration: human provides the "should be" from physics intui
 4. **The hard bugs are physics bugs, not code bugs** - Missing covariant derivatives, wrong extrinsic curvature signs, non-stationary metrics. These require understanding the physics to even recognize as bugs.
 
 5. **Iteration speed matters** - Going from "that's wrong" to "here's the fix" in minutes rather than days changes what's possible.
+
+## An Aside
+Found that there was a May 2025 paper on apparent horizon finding - see [https://arxiv.org/html/2505.15912v1](https://arxiv.org/html/2505.15912v1)
+As a next step look into that paper and explore some of the other ideas on this.
 
 ## References
 

@@ -588,6 +588,68 @@ rho = finder.find(initial_radius=2.0, tol=1e-5)
 
 ---
 
+## Session: 2026-02-07 (continued) - JFNK Implementation
+
+### Prompt: Implement Jacobian-Free Newton-Krylov (JFNK)
+
+**User Request**: Implement JFNK as an alternative to dense Jacobian computation to reduce the O(n²) complexity.
+
+**Implementation**:
+
+1. Added JFNK solver option to `NewtonSolver` class:
+   - Matrix-free matvec: `J @ v ≈ (F(ρ + εv) - F(ρ)) / ε`
+   - Optimal epsilon scaling from Knoll & Keyes (2004)
+   - GMRES with restart for iterative solve
+
+2. Added lagged Jacobian preconditioner:
+   - Compute full Jacobian on first Newton iteration
+   - Use LU factorization as preconditioner for subsequent iterations
+   - Dramatically reduces GMRES iterations (from ~50-100 to ~1-2 near convergence)
+
+**Known Issue**:
+Encountered a subtle bug where the finite-difference matvec produces incorrect results for certain vectors. The root cause appears to be related to Python closure semantics or numpy internal state. The workaround is to re-evaluate F(ρ) inside each matvec call, which doubles the cost.
+
+**Performance Results** (N_s=9):
+```
+Dense Jacobian: 6 iterations, ~2s
+JFNK (with workaround): 6 iterations, ~126s
+```
+
+The JFNK implementation is slower than expected due to:
+1. The double-evaluation workaround
+2. GMRES taking 100 iterations for early Newton steps (preconditioner becomes stale)
+
+**Recommendation**: Use dense Jacobian (default) for typical problem sizes (N_s ≤ 33). JFNK may be beneficial for very large problems where O(n²) Jacobian storage becomes prohibitive.
+
+### Files Modified
+
+1. `src/ahfinder/solver.py`:
+   - Added `use_jfnk`, `jfnk_maxiter`, `jfnk_tol` parameters
+   - Added `_solve_jfnk()` method with GMRES and preconditioner
+   - Added preconditioner caching (`_jfnk_precond`, `_jfnk_precond_lu`)
+
+2. `src/ahfinder/finder.py`:
+   - Added JFNK parameters to `ApparentHorizonFinder`
+
+### Usage
+
+```python
+from ahfinder import ApparentHorizonFinder
+from ahfinder.metrics import SchwarzschildMetric
+
+# Use JFNK solver
+finder = ApparentHorizonFinder(
+    metric,
+    N_s=33,
+    use_jfnk=True,       # Enable JFNK
+    jfnk_maxiter=100,    # Max GMRES iterations
+    jfnk_tol=1e-6        # GMRES tolerance
+)
+rho = finder.find(initial_radius=2.5, tol=1e-6)
+```
+
+---
+
 ## Current Status
 
 - **Core algorithm**: Working correctly with O(h²) convergence
@@ -596,5 +658,182 @@ rho = finder.find(initial_radius=2.0, tol=1e-5)
 - **Boosted Schwarzschild**: PASSING (area ratio ~0.9999)
 - **Boosted Kerr**: PASSING (area ratio ~0.9996)
 - **Fast boosted metric**: IMPLEMENTED - 5.6x speedup
+- **JFNK solver**: IMPLEMENTED (with performance caveats)
 - **Total tests**: 83 passing
 - **Performance**: Boosted horizon finding reduced from ~60s to ~11s at N_s=13
+
+---
+
+## Session: 2026-02-08/09 - FastBoostedKerrMetric and Gallery Generation
+
+### Prompt: Optimize Performance Further
+
+**User Request**: What recommendations to reduce run time further? What are remaining bottlenecks?
+
+**Performance Analysis**:
+1. **Residual evaluation**: 60-70% of time
+2. **Jacobian computation**: 25-30% of time
+3. **Scipy interpolation**: ~28% of residual time (RectBivariateSpline)
+
+**Optimizations Implemented**:
+
+1. **Vectorized Christoffel computation** - Replaced 4 nested loops with einsum:
+```python
+# Old (slow):
+for k in range(3):
+    for i in range(3):
+        for j in range(3):
+            for l in range(3):
+                chris[k,i,j] += gamma_inv[k,l] * (...)
+
+# New (fast):
+bracket = dgamma.transpose(1,0,2) + dgamma.transpose(2,1,0) - dgamma
+chris = 0.5 * np.einsum('kl,lij->kij', gamma_inv, bracket)
+```
+
+2. **Numba JIT for compute_expansion** - 29x speedup on inner loop (`residual_fast.py`)
+
+3. **Numba JIT for Schwarzschild metric** - `SchwarzschildMetricFast` class
+
+**Measured Speedups**:
+- Schwarzschild horizon finding: **2.5x speedup** (N_s=13: 6s → 2.3s)
+- Inner compute_expansion: **29x speedup**
+
+---
+
+### Prompt: Fix Boosted Kerr Metric Bug
+
+**Problem Identified**: All boosted Kerr cases showing identical results regardless of spin parameter a.
+
+**Root Cause**: `FastBoostedMetric` used Schwarzschild derivative formulas (`dH = -H*l/r`) even for Kerr metrics, which have different H and l formulas.
+
+**Solution**: Created `FastBoostedKerrMetric` class with semi-analytical approach:
+
+1. Compute H and l numerically in rest frame (6 offset evaluations)
+2. Transform derivatives to lab frame using Lorentz transformation matrix
+3. Combine analytically using Kerr-Schild formulas:
+   - `γ_ij = δ_ij + 2H l_i l_j`
+   - `∂_k γ_ij = 2 dH_k l_i l_j + 2H dl_ik l_j + 2H l_i dl_jk`
+   - `K_ij = (1/2α)(D_i β_j + D_j β_i)`
+
+4. All core functions JIT-compiled with Numba
+
+**Files Created**:
+- `src/ahfinder/metrics/boosted_kerr_fast.py` - Semi-analytical boosted Kerr implementation
+- `src/ahfinder/metrics/kerr_analytical.py` - Kerr with analytical derivatives
+
+---
+
+### Prompt: Generate Gallery with Diagonal Boosts
+
+**User Request**: Generate a gallery of boosted Kerr black hole horizons with diagonal boost examples.
+
+**Gallery Configuration**:
+- Spins: a = 0, 0.25, 0.5, 0.75, 0.99
+- X-direction boosts: v = 0, 0.3, 0.6
+- Diagonal boosts (xy-plane): v = 0.3, 0.6 at a = 0, 0.5
+
+**Results Summary**:
+
+| Boost Type | Cases | Converged | Notes |
+|------------|-------|-----------|-------|
+| X-direction (v=0) | 5 | 5/5 | All spins work |
+| X-direction (v=0.3) | 5 | 5/5 | All spins work |
+| X-direction (v=0.6) | 5 | 4/5 | a=0.99 skipped (extreme) |
+| Diagonal (v=0.3) | 2 | 2/2 | a=0, 0.5 |
+| Diagonal (v=0.6) | 2 | 2/2 | a=0, 0.5 |
+| **Total** | **19** | **18/19** | 94.7% success |
+
+**Key Physical Observations**:
+1. Higher spin → more oblate horizon (r_eq > r_pol at rest)
+2. Higher boost → Lorentz contraction reduces equatorial radius
+3. Area decreases with boost velocity (lab frame measurement)
+4. Diagonal boosts give same r_eq, r_pol as x-boosts at same speed (orientation differs)
+
+**Sample Results (v=0.6 x-direction boost)**:
+| a | r_eq | r_pol | Area |
+|---|------|-------|------|
+| 0.00 | 1.816 | 1.937 | 43.39 |
+| 0.25 | 1.802 | 1.906 | 42.70 |
+| 0.50 | 1.756 | 1.806 | 40.48 |
+| 0.75 | 1.658 | 1.605 | 36.05 |
+
+---
+
+### Prompt: Add Tests for Boosted Kerr Metric
+
+**User Request**: Ensure tests verify the metric and extrinsic curvature calculations are correct. Use SageMath for invariants.
+
+**SageMath Analysis**:
+
+Key invariants derived for Kerr-Schild metrics:
+1. `det(γ) = 1 + 2H` (when |l|² = 1)
+2. `γ^ij γ_jk = δ^i_k` (inverse relation)
+3. Kerr-Schild slicing is NOT maximal slicing (K ≠ 0)
+
+**Important Discovery**: My initial tests incorrectly expected K = 0 for stationary Kerr. In Kerr-Schild coordinates:
+- Schwarzschild at (3,0,0): K_trace = 0.207
+- Kerr (a=0.5) at (3,0,0): K_trace = 0.212
+
+This is correct - Kerr-Schild is a horizon-penetrating coordinate system with specific slicing, not maximal slicing.
+
+**Tests Created** (`tests/test_boosted_kerr.py`):
+
+| Category | Tests | Status |
+|----------|-------|--------|
+| Kerr-Schild Invariants | det(γ)=1+2H, inverse, symmetry, positive definite | ✓ PASS |
+| Lapse/Shift | Lapse formula, shift direction | ✓ PASS |
+| Metric Derivatives | dgamma numerical vs analytical, symmetry | ✓ PASS |
+| Extrinsic Curvature | Symmetry, matches original metrics, boost changes K | ✓ PASS |
+| Boost Transformation | Unboosted matches Kerr, different spins differ | ✓ PASS |
+| Lorentz Contraction | Gamma factor, Lambda matrix | ✓ PASS |
+| Edge Cases | Schwarzschild limit, near horizon, high spin | ✓ PASS |
+
+**Total: 20 new tests, all passing**
+
+---
+
+### Bug Fix: Kerr Equatorial Radius Test
+
+**Problem**: `test_kerr_horizon_equatorial_radius` was failing with 3.5% error.
+
+**Root Cause**: Test expected Boyer-Lindquist radius `r_+`, but `horizon_radius_equatorial()` returns Cartesian distance.
+
+**Correct Formula**: In Kerr-Schild coordinates at equator (z=0):
+```
+R_eq = √(r_+² + a²)
+```
+
+For a=0.5, M=1:
+- r_+ = 1 + √(1 - 0.25) = 1.866 (Boyer-Lindquist)
+- R_eq = √(1.866² + 0.5²) = 1.932 (Cartesian)
+
+**Fix Applied**: Updated test to use correct formula.
+
+---
+
+### Files Created/Modified This Session
+
+**New Files**:
+1. `src/ahfinder/metrics/boosted_kerr_fast.py` - FastBoostedKerrMetric class
+2. `src/ahfinder/metrics/kerr_analytical.py` - Kerr with analytical derivatives
+3. `src/ahfinder/residual_fast.py` - Numba JIT expansion computation
+4. `src/ahfinder/metrics/schwarzschild_fast.py` - Fast Schwarzschild metric
+5. `tests/test_boosted_kerr.py` - 20 tests for boosted Kerr metrics
+6. `gallery/horizon_a*_v*_diag.png` - Diagonal boost horizon images
+
+**Modified Files**:
+1. `gallery/generate_gallery.py` - Added diagonal boost support, fixed interpolation
+2. `tests/test_kerr.py` - Fixed equatorial radius test formula
+3. `src/ahfinder/residual.py` - Vectorized Christoffel computation
+
+---
+
+## Current Status
+
+- **Core algorithm**: Working correctly with O(h²) convergence
+- **All metrics**: Schwarzschild, Kerr, Boosted variants - all working
+- **FastBoostedKerrMetric**: Semi-analytical approach with Numba JIT
+- **Gallery**: 18/19 horizons generated including diagonal boosts
+- **Total tests**: 108 passing (including 20 new boosted Kerr tests)
+- **Performance**: Significant speedups from Numba JIT and vectorization

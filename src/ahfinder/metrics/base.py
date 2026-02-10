@@ -108,15 +108,10 @@ class Metric(ABC):
         gamma_up = self.gamma_inv(x, y, z)
         dg = self.dgamma(x, y, z)
 
-        # Γ^i_jk = (1/2) γ^il (∂_j γ_lk + ∂_k γ_jl - ∂_l γ_jk)
-        chris = np.zeros((3, 3, 3))
-        for i in range(3):
-            for j in range(3):
-                for k in range(3):
-                    for l in range(3):
-                        chris[i, j, k] += 0.5 * gamma_up[i, l] * (
-                            dg[j, l, k] + dg[k, j, l] - dg[l, j, k]
-                        )
+        # Γ^i_jk = (1/2) γ^il (∂_j γ_lk + ∂_k γ_jl - ∂_l γ_jk) (vectorized)
+        # dg[k,i,j] = ∂_k γ_{ij}, so we transpose to get the right indices
+        bracket = dg.transpose(1, 0, 2) + dg.transpose(2, 1, 0) - dg
+        chris = 0.5 * np.einsum('il,ljk->ijk', gamma_up, bracket)
         return chris
 
     def christoffel_contracted(self, x: float, y: float, z: float) -> np.ndarray:

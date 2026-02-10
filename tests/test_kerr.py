@@ -120,9 +120,12 @@ class TestKerrHorizonFinding:
         finder = ApparentHorizonFinder(metric, N_s=33)
         rho = finder.find(initial_radius=1.9, tol=1e-6, verbose=False)
 
-        # Equatorial radius
+        # Equatorial radius in Cartesian coordinates
+        # In Kerr-Schild coords, at equator (z=0): R² = r² + a²
+        # So R_eq = sqrt(r_+² + a²) where r_+ = M + sqrt(M² - a²)
         r_eq = finder.horizon_radius_equatorial(rho)
-        expected_eq = M + np.sqrt(M**2 - a**2)
+        r_plus = M + np.sqrt(M**2 - a**2)
+        expected_eq = np.sqrt(r_plus**2 + a**2)
 
         # Allow 2% error
         np.testing.assert_allclose(r_eq, expected_eq, rtol=0.02)

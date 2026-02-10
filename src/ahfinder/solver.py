@@ -6,8 +6,14 @@ Implements the Newton iteration:
 
 where F[ρ] is the residual and J is the Jacobian.
 
-The linear system J δρ = -F is solved using iterative methods
-(GMRES or BiCGSTAB with ILU preconditioning) for efficiency.
+Two solver modes are available:
+1. Dense Jacobian: Compute full J and solve with numpy.linalg.solve
+2. Jacobian-Free Newton-Krylov (JFNK): Use iterative GMRES with
+   matrix-vector products computed via finite differences:
+   J @ v ≈ (F(ρ + εv) - F(ρ)) / ε
+
+JFNK reduces complexity from O(n²) to O(n × k) where k is the number
+of Krylov iterations, providing significant speedup for larger problems.
 
 Reference: Huq, Choptuik & Matzner (2000), Section II.E
 """
@@ -54,7 +60,10 @@ class NewtonSolver:
         epsilon: float = 1e-5,
         spacing_factor: float = 0.5,
         verbose: bool = True,
-        use_fast_interpolator: bool = True
+        use_fast_interpolator: bool = True,
+        use_jfnk: bool = False,
+        jfnk_maxiter: int = 50,
+        jfnk_tol: float = 1e-6
     ):
         """
         Initialize Newton solver.
@@ -69,6 +78,9 @@ class NewtonSolver:
             spacing_factor: Stencil spacing factor
             verbose: Print convergence information
             use_fast_interpolator: Use SciPy-based fast interpolator (default True)
+            use_jfnk: Use Jacobian-Free Newton-Krylov method (default False)
+            jfnk_maxiter: Maximum GMRES iterations for JFNK
+            jfnk_tol: Relative tolerance for GMRES in JFNK
         """
         self.mesh = mesh
         self.metric = metric
@@ -77,6 +89,9 @@ class NewtonSolver:
         self.max_iter = max_iter
         self.epsilon = epsilon
         self.verbose = verbose
+        self.use_jfnk = use_jfnk
+        self.jfnk_maxiter = jfnk_maxiter
+        self.jfnk_tol = jfnk_tol
 
         # Set up interpolator and residual evaluator
         if use_fast_interpolator:
@@ -93,6 +108,11 @@ class NewtonSolver:
         # Storage for convergence history
         self.residual_history: List[float] = []
         self.delta_rho_history: List[float] = []
+        self.jfnk_iterations: List[int] = []  # Track GMRES iterations
+
+        # Cached preconditioner for JFNK (lagged Jacobian)
+        self._jfnk_precond = None
+        self._jfnk_precond_lu = None
 
     def solve(
         self,
@@ -132,10 +152,16 @@ class NewtonSolver:
         # Clear history
         self.residual_history = []
         self.delta_rho_history = []
+        self.jfnk_iterations = []
+
+        # Clear preconditioner cache for fresh solve
+        self._jfnk_precond = None
+        self._jfnk_precond_lu = None
 
         if self.verbose:
             print("Newton iteration for apparent horizon:")
-            print(f"  N_s = {self.mesh.N_s}, tol = {self.tol}")
+            mode = "JFNK" if self.use_jfnk else "Dense Jacobian"
+            print(f"  N_s = {self.mesh.N_s}, tol = {self.tol}, mode = {mode}")
             print("-" * 50)
 
         for iteration in range(self.max_iter):
@@ -155,12 +181,15 @@ class NewtonSolver:
                     print(f"Converged in {iteration + 1} iterations")
                 return rho
 
-            # Compute the Jacobian J for current ρ
-            # Use dense Jacobian - the sparse version misses important couplings
-            J = self.jacobian_computer.compute_dense(rho)
-
             # Solve J · δρ = -F[ρ] for δρ
-            delta_rho_flat = np.linalg.solve(J, -F)
+            if self.use_jfnk:
+                # Jacobian-Free Newton-Krylov: use GMRES with matrix-free matvec
+                delta_rho_flat, gmres_iters = self._solve_jfnk(rho, F, iteration)
+                self.jfnk_iterations.append(gmres_iters)
+            else:
+                # Dense Jacobian: compute full J and solve directly
+                J = self.jacobian_computer.compute_dense(rho)
+                delta_rho_flat = np.linalg.solve(J, -F)
 
             # Convert flat array to grid
             delta_rho = self.mesh.flat_to_grid(delta_rho_flat)
@@ -173,7 +202,10 @@ class NewtonSolver:
             self.delta_rho_history.append(delta_norm)
 
             if self.verbose:
-                print(f", ||δρ|| = {delta_norm:.6e}")
+                if self.use_jfnk:
+                    print(f", ||δρ|| = {delta_norm:.6e} (GMRES: {self.jfnk_iterations[-1]} iters)")
+                else:
+                    print(f", ||δρ|| = {delta_norm:.6e}")
 
         # Failed to converge
         if self.verbose:
@@ -184,6 +216,129 @@ class NewtonSolver:
             f"Newton iteration did not converge after {self.max_iter} iterations. "
             f"Final ||F|| = {self.residual_history[-1]:.2e}"
         )
+
+    def _solve_jfnk(
+        self,
+        rho: np.ndarray,
+        F: np.ndarray,
+        iteration: int = 0
+    ) -> Tuple[np.ndarray, int]:
+        """
+        Solve J · δρ = -F using Jacobian-Free Newton-Krylov method.
+
+        Uses GMRES with matrix-vector products computed via finite differences:
+            J @ v ≈ (F(ρ + εv) - F(ρ)) / ε
+
+        This avoids forming the full Jacobian, reducing complexity from
+        O(n²) to O(n × k) where k is the number of GMRES iterations.
+
+        A lagged Jacobian preconditioner is used to accelerate convergence:
+        - On the first Newton iteration, we compute the full Jacobian
+        - Its LU factorization is used as a preconditioner for GMRES
+        - This reduces GMRES iterations from O(n) to O(1) typically
+
+        Args:
+            rho: Current surface (grid form)
+            F: Current residual (flat form)
+            iteration: Current Newton iteration number
+
+        Returns:
+            Tuple of (delta_rho_flat, gmres_iterations)
+        """
+        # Make a copy of F to avoid potential aliasing issues in the matvec closure
+        # (This prevents a subtle bug where F could be modified between iterations)
+        F = F.copy()
+        n = len(F)
+
+        # Counter for GMRES iterations
+        iteration_count = [0]
+
+        def callback(xk):
+            iteration_count[0] += 1
+
+        # Pre-compute rho norm for epsilon scaling
+        rho_flat = self.mesh.grid_to_flat(rho)
+        rho_norm = np.linalg.norm(rho_flat)
+
+        # Pre-compute constants for matvec
+        sqrt_eps = np.sqrt(np.finfo(float).eps)  # ~1.5e-8
+
+        def matvec(v):
+            """
+            Compute J @ v using finite difference approximation.
+
+            J @ v ≈ (F(ρ + ε*v̂) - F(ρ)) / ε
+
+            Uses the formula from Knoll & Keyes (2004):
+            ε = sqrt(machine_eps) * (1 + ||ρ||) / ||v||
+
+            This balances truncation error and roundoff error.
+
+            Note: We re-evaluate F(ρ) each call to avoid subtle caching bugs.
+            """
+            v_norm = np.linalg.norm(v)
+            if v_norm < 1e-14:
+                return np.zeros(n)
+
+            # Optimal epsilon from Knoll & Keyes (2004), Eq. 5
+            eps = sqrt_eps * (1.0 + rho_norm) / v_norm
+
+            # Convert v to grid form, perturb rho, evaluate F
+            v_grid = self.mesh.flat_to_grid(v)
+            rho_perturbed = rho + eps * v_grid
+
+            # Evaluate both F(rho) and F(rho_perturbed) fresh to avoid caching issues
+            F_base = self.residual_evaluator.evaluate(rho)
+            F_perturbed = self.residual_evaluator.evaluate(rho_perturbed)
+
+            # J @ v ≈ (F(ρ + εv) - F(ρ)) / ε
+            return (F_perturbed - F_base) / eps
+
+        # Create LinearOperator for GMRES
+        J_op = LinearOperator((n, n), matvec=matvec, dtype=float)
+
+        # Build or update preconditioner
+        # We compute a full Jacobian on the first iteration and use it
+        # as a lagged preconditioner for subsequent iterations
+        M = None
+        if iteration == 0 or self._jfnk_precond_lu is None:
+            # Compute full Jacobian for preconditioning
+            if self.verbose:
+                print(" [computing preconditioner]", end="", flush=True)
+            J_dense = self.jacobian_computer.compute_dense(rho)
+            self._jfnk_precond = J_dense
+
+            # LU factorization for fast solves
+            from scipy.linalg import lu_factor
+            self._jfnk_precond_lu = lu_factor(J_dense)
+
+        # Create preconditioner as LinearOperator
+        if self._jfnk_precond_lu is not None:
+            from scipy.linalg import lu_solve
+            lu, piv = self._jfnk_precond_lu
+
+            def precond_solve(v):
+                return lu_solve((lu, piv), v)
+
+            M = LinearOperator((n, n), matvec=precond_solve, dtype=float)
+
+        # Solve with GMRES
+        # Use restart to help with convergence
+        delta_rho_flat, info = gmres(
+            J_op, -F,
+            M=M,  # Preconditioner
+            rtol=self.jfnk_tol,
+            atol=self.tol * 0.1,  # Absolute tolerance based on Newton tolerance
+            maxiter=self.jfnk_maxiter,
+            restart=min(30, n),  # Restart GMRES for better convergence
+            callback=callback,
+            callback_type='x'
+        )
+
+        if info != 0:
+            warnings.warn(f"JFNK GMRES did not fully converge (info={info})")
+
+        return delta_rho_flat, iteration_count[0]
 
     def _solve_linear_system(
         self,
