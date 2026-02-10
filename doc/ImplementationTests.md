@@ -1125,6 +1125,126 @@ rho = finder.find()
 
 ---
 
+## 14. Graph Coloring Experiment (Negative Result)
+
+**Purpose**: Test whether graph coloring compression could further speed up Jacobian computation.
+
+### Background
+
+When the Jacobian is sparse, many columns are structurally independent (don't share non-zero rows). By grouping such columns via graph coloring, we could theoretically compute multiple columns simultaneously with a single perturbed residual evaluation.
+
+For N_s=25: 577 columns compress to 77 color groups → theoretical 7.5x fewer evaluations.
+
+### Implementation
+
+Created `jacobian_compressed.py` with:
+- `compute_column_colors()` - greedy graph coloring algorithm
+- `compute_compressed_jacobian()` - evaluates multiple columns per color group
+
+### Results
+
+| N_s | DOFs | Colors | Regular Sparse (s) | Compressed (s) | Speedup |
+|-----|------|--------|-------------------|----------------|---------|
+| 13  | 145  | 47     | 0.27              | 0.51           | 0.5x    |
+| 17  | 257  | 54     | 0.45              | 1.01           | 0.4x    |
+| 21  | 401  | 68     | 0.72              | 1.91           | 0.4x    |
+| 25  | 577  | 77     | 1.06              | 3.17           | 0.3x    |
+
+**Result**: Graph coloring is **slower** than regular sparse Jacobian.
+
+### Analysis
+
+The compression doesn't help because:
+
+1. **Regular sparse Jacobian is already highly optimized**: It only evaluates the ~25 affected residuals per column, not the full residual vector.
+
+2. **Work comparison**:
+   - Regular sparse: 577 columns × ~25 affected residuals = ~14,000 point evaluations
+   - Compressed: 77 groups × 577 full residuals = ~44,000 point evaluations
+
+3. **When graph coloring helps**: The technique is valuable when:
+   - Full residual evaluations are unavoidable (dense Jacobian case)
+   - The Jacobian is denser (each column affects many rows)
+   - Tracking affected residuals has significant overhead
+
+4. **Why it doesn't help here**: The Lagrange interpolation creates such sparse coupling (~25 dependencies per column) that direct sparse evaluation is already optimal. The coloring overhead and full residual evaluations outweigh the reduced number of groups.
+
+**Status**: ✗ NOT BENEFICIAL - Regular sparse Jacobian remains optimal
+
+### Lesson Learned
+
+This experiment demonstrates that optimizations must be evaluated holistically. While graph coloring theoretically reduces the number of perturbed evaluations, the existing sparse Jacobian implementation already exploits locality so effectively that further compression provides no benefit. The ~25 affected residuals per column is small enough that direct computation outperforms grouped computation.
+
+---
+
+## 15. Vectorized Jacobian Computation
+
+**Purpose**: Achieve maximum speedup through batched operations.
+
+### Motivation
+
+Profiling the sparse Jacobian revealed:
+- 90% of time spent in interpolation
+- Called 32,054 times with 27 points each (small batches)
+- Opportunity: batch ALL stencil points together
+
+### Implementation
+
+Created `residual_vectorized.py` and `jacobian_vectorized.py`:
+
+1. **Batch coordinate computation**: All grid points at once
+2. **Batch stencil points**: 577 × 27 = 15,579 points per residual call
+3. **Single large interpolation call**: Instead of many small ones
+4. **Numba JIT parallel expansion**: `@jit(parallel=True)` for expansion computation
+
+### Test 15.1: Residual Vectorization
+
+**Results** (residual evaluation only):
+
+| N_s | Point-by-point (ms) | Vectorized (ms) | Speedup |
+|-----|---------------------|-----------------|---------|
+| 13  | 10.1                | 0.76            | 13.3x   |
+| 17  | 17.7                | 1.12            | 15.7x   |
+| 21  | 28.2                | 1.72            | 16.4x   |
+| 25  | 40.8                | 2.47            | 16.5x   |
+
+**Status**: ✓ PASS - 13-17x speedup on residual evaluation
+
+### Test 15.2: Full Jacobian Vectorization
+
+**Results** (Jacobian computation):
+
+| N_s | Original Sparse (s) | Vectorized Sparse (s) | Speedup |
+|-----|--------------------|-----------------------|---------|
+| 13  | 0.24               | 0.047                 | 5.1x    |
+| 17  | 0.46               | 0.083                 | 5.6x    |
+| 21  | 0.74               | 0.130                 | 5.7x    |
+| 25  | 1.07               | 0.191                 | 5.6x    |
+
+**Status**: ✓ PASS - 5-6x speedup on Jacobian computation
+
+### Test 15.3: Full Horizon Finding
+
+**Comprehensive benchmark** (N_s=25, Schwarzschild):
+
+| Configuration | Time (s) | Speedup |
+|--------------|----------|---------|
+| Dense Jacobian + Regular Metric | 66.4 | 1.0x |
+| Dense Jacobian + Fast Metric | 26.7 | 2.5x |
+| Sparse Jacobian + Regular Metric | 5.5 | 12.1x |
+| Sparse Jacobian + Fast Metric | 3.4 | 19.5x |
+| **Vectorized Jacobian + Fast Metric** | **0.59** | **112.8x** |
+
+**Status**: ✓ PASS - **112.8x total speedup achieved**
+
+### Usage
+
+```python
+finder = ApparentHorizonFinder(metric, N_s=25, use_vectorized_jacobian=True)
+```
+
+---
+
 ## Summary (Updated)
 
 | Component | Status | Tests |
@@ -1141,9 +1261,12 @@ rho = finder.find()
 | Boosted Metrics | ✓ PASS | 3/3 |
 | Fast Boosted Metrics | ✓ PASS | 5/5 |
 | FastBoostedKerrMetric | ✓ PASS | 20/20 |
-| **Sparse Jacobian** | ✓ PASS | **4/4** |
+| Sparse Jacobian | ✓ PASS | 4/4 |
+| **Vectorized Jacobian** | ✓ PASS | **3/3** |
 
-**Total: 112/112 tests passing**
+**Total: 115/115 tests passing**
+
+**Performance Achievement: 112.8x speedup** (66.4s → 0.59s at N_s=25)
 
 ---
 

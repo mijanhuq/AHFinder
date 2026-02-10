@@ -17,7 +17,7 @@ A complete Python implementation of an apparent horizon finder for black hole sp
 - Newton solver for locating surfaces where the expansion of outgoing null normals vanishes (Θ = 0)
 - Cartesian finite difference stencils to avoid coordinate singularities at poles
 - Support for Schwarzschild, Kerr, and Lorentz-boosted black hole metrics
-- Comprehensive test suite with 112 verified tests
+- Comprehensive test suite with 115 verified tests
 - Fast analytical boosted metrics with Numba JIT compilation
 - Gallery of 18 horizon visualizations including diagonal boosts
 
@@ -78,7 +78,7 @@ AHFinder/
 │       ├── boosted.py
 │       ├── boosted_fast.py        # Fast analytical boosted metrics
 │       └── boosted_kerr_fast.py   # Semi-analytical boosted Kerr (Numba)
-├── tests/                  # Test suite (112 tests)
+├── tests/                  # Test suite (115 tests)
 │   ├── test_jacobian.py    # Critical row-sum tests
 │   ├── test_residual.py
 │   ├── test_boosted_kerr.py  # FastBoostedKerrMetric validation
@@ -186,44 +186,44 @@ finder = ApparentHorizonFinder(
 
 ### Performance Optimizations
 
-The codebase includes several optimizations for improved performance:
+The codebase includes several optimizations achieving **112x total speedup**:
 
 | Optimization | Speedup | Notes |
 |-------------|---------|-------|
+| **Vectorized Jacobian** | **5-6x** | Batched interpolation with Numba JIT |
 | **Sparse Jacobian** | **5-12x** | Local Lagrange interpolation enables sparse computation |
 | Vectorized Christoffel computation | 2-3x | Replaced nested loops with `einsum` |
 | Numba JIT for `compute_expansion` | 29x | Inner expansion calculation |
 | `SchwarzschildMetricFast` | 2.5x | JIT-compiled metric components |
 | `FastBoostedKerrMetric` | ~10x | Semi-analytical approach with JIT |
 
-**Sparse Jacobian Details**: Using local 4×4 Lagrange interpolation instead of global splines reduces Jacobian density from 99% to 4-9%. Combined with sparse linear solvers:
+**Vectorized Jacobian**: Profiling showed 90% of time was in interpolation called with small batches. By batching all stencil points together (577 × 27 = 15,579 points per call), we achieve massive speedups:
 
-| N_s | Dense Jacobian (s) | Sparse Jacobian (s) | Speedup |
-|-----|-------------------|---------------------|---------|
-| 17  | 13.5              | 2.5                 | 5.5x    |
-| 21  | 32.8              | 3.9                 | 8.5x    |
-| 25  | 67.3              | 5.6                 | **12x** |
-
-**Combined Optimizations** (N_s=25): Using both sparse Jacobian and `SchwarzschildMetricFast`:
-
-| Configuration | Time | Speedup |
-|--------------|------|---------|
-| Dense Jacobian + Regular Metric | 67s | 1x |
-| **Sparse Jacobian + Fast Metric** | **3.4s** | **20x** |
+| Configuration | Time (N_s=25) | Speedup |
+|--------------|---------------|---------|
+| Dense Jacobian + Regular Metric | 66.4s | 1.0x |
+| Dense Jacobian + Fast Metric | 26.7s | 2.5x |
+| Sparse Jacobian + Regular Metric | 5.5s | 12.1x |
+| Sparse Jacobian + Fast Metric | 3.4s | 19.5x |
+| **Vectorized Jacobian + Fast Metric** | **0.59s** | **112.8x** |
 
 ![Jacobian Sparsity](doc/jacobian_sparsity_comparison.png)
 
-To use the fast implementations:
+To use the fastest configuration:
 
 ```python
+from ahfinder import ApparentHorizonFinder
 from ahfinder.metrics.schwarzschild_fast import SchwarzschildMetricFast
 from ahfinder.metrics.boosted_kerr_fast import FastBoostedKerrMetric
 
-# Use fast Schwarzschild metric
+# Use fast Schwarzschild metric with vectorized Jacobian (112x speedup)
 metric = SchwarzschildMetricFast(M=1.0)
+finder = ApparentHorizonFinder(metric, N_s=25, use_vectorized_jacobian=True)
+rho = finder.find(initial_radius=2.0)
 
 # Use fast boosted Kerr metric
 metric = FastBoostedKerrMetric(M=1.0, a=0.5, velocity=np.array([0.3, 0.0, 0.0]))
+finder = ApparentHorizonFinder(metric, N_s=25, use_vectorized_jacobian=True)
 ```
 
 ## Results
@@ -288,12 +288,28 @@ This project demonstrates capabilities beyond simple code generation. Here's wha
 - **Domain validation**: Is this physically reasonable? Does it match intuition from 30 years of experience?
 - **Architectural decisions**: What abstractions make sense? What's the right API?
 - **Pointing out approaches that the LLM might not have thought of** For example, in the evaluation of the boosted Kerr metric it was using numerical derivatives and that was slow. It did not try to improve that further and said symbolic manipulation was giving complex expressions. I then laid out an approach taking advantage of the Kerr-Schild metric form. I asked it to use SageMath thereafter and it worked. Bottom line, watch for possible simplifications or approaches that could boost Claude's work.
-- **Performance optimization through domain insight**: The 20x speedup came from a series of human-guided explorations:
+- **Performance optimization through domain insight**: The **112x speedup** came from a series of human-guided explorations:
   1. *"Why is the Jacobian dense when the stencil is local?"* — Claude investigated and found spline interpolation creates global coupling
-  2. *"Are there local interpolation methods like Lagrange?"* — Led to implementing 4×4 Lagrange stencils with true locality
-  3. *"Now that we have a sparse matrix, try LU-preconditioned CG again"* — Previously dismissed as slower, but now beneficial with sparse structure
+  2. *"Are there local interpolation methods like Lagrange?"* — Led to implementing 4×4 Lagrange stencils with true locality (12x speedup)
+  3. *"Now that we have a sparse matrix, try LU-preconditioned CG again"* — Previously dismissed as slower, but now beneficial with sparse structure (20x total)
+  4. *"Can we vectorize the residual evaluation?"* — Profiling revealed 90% time in small-batch interpolation; batching all stencil points together gave another 5.8x (112x total)
 
   This entire optimization journey was informed by Mijan's experience building the original AH finder. We revisited the same research decisions and trade-offs that were explored in the original PhD work—interpolation schemes, Jacobian structure, iterative vs. direct solvers—but now in hours instead of months. The human knew which knobs to turn because he had turned them before; Claude provided rapid implementation and systematic testing.
+
+### What the AI Brought
+
+The AI's primary contribution is **acceleration**—rapidly implementing and testing ideas that the human directs:
+
+- **Rapid implementation of vectorization**: When the human suggested exploring vectorization (a natural optimization direction), Claude quickly implemented batched operations, Numba JIT compilation with `@jit(parallel=True)`, and proper array layouts. What might take a day of coding and debugging was done in minutes.
+
+- **Systematic profiling and iteration**: Claude profiled, identified the bottleneck (90% in small-batch interpolation), implemented fixes, and verified correctness—all in rapid succession. The human guides *what* to optimize; the AI accelerates *how fast* we can try things.
+
+- **Proposing additional techniques**: Claude suggested graph coloring for Jacobian compression from sparse matrix literature. While it didn't help here (our Jacobian was already too sparse), having the AI propose and quickly test such ideas costs little and occasionally yields wins.
+
+- **Handling implementation details**: Correct Numba usage (`nopython=True`, `cache=True`), proper array indexing, parallel loop patterns—the AI handles these details correctly, freeing the human to focus on algorithm design.
+
+**The key insight**: The human physicist would naturally think of vectorization and sparsity (and indeed directed both). The AI's value is in dramatically compressing the implementation-test-iterate cycle. Ideas that would take days to properly implement and debug can be explored in minutes. This acceleration changes what's practical to try.
+
 ### The Collaboration Pattern
 
 The most effective pattern was **iterative refinement with physics constraints**:
@@ -317,6 +333,10 @@ Human: "What about Lagrange interpolation? That's truly local."
 Claude: [Implements] "Now 4-9% dense. 12x speedup on Jacobian."
 Human: "With sparse matrices, try the CG approach again."
 Claude: [Tests ILU+BiCGSTAB] "Works now! Total 20x speedup."
+Human: "I want to explore vectorizing the residual evaluation."
+Claude: [Profiles] "90% of time is in interpolation with small batches."
+Claude: [Implements batching] "Batch all 15,579 stencil points together."
+Claude: "Now 0.59s instead of 66s. Total 112x speedup!"
 ```
 
 This is genuine collaboration: human provides the "should be" from physics intuition, AI provides the "why isn't it" through systematic investigation, together we reach "now it is."
@@ -332,6 +352,8 @@ This is genuine collaboration: human provides the "should be" from physics intui
 4. **The hard bugs are physics bugs, not code bugs** - Missing covariant derivatives, wrong extrinsic curvature signs, non-stationary metrics. These require understanding the physics to even recognize as bugs.
 
 5. **Iteration speed matters** - Going from "that's wrong" to "here's the fix" in minutes rather than days changes what's possible.
+
+6. **AI accelerates the human's ideas** - The 112x speedup came from human-directed optimizations (sparsity, vectorization) that the AI rapidly implemented and tested. A physicist working alone would eventually get there; the AI compresses weeks of implementation into hours. This acceleration makes it practical to explore more approaches and iterate more times.
 
 ## An Aside
 Found that there was a May 2025 paper on apparent horizon finding - see [https://arxiv.org/html/2505.15912v1](https://arxiv.org/html/2505.15912v1)

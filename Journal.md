@@ -983,6 +983,57 @@ Newton still converges correctly with Lagrange interpolation despite lower accur
 - Python overhead: 12%
 - Expansion (Numba JIT): 1%
 
+### Graph Coloring Experiment (Negative Result)
+
+Explored whether graph coloring compression could further speed up Jacobian computation.
+
+**Concept**: Group structurally independent columns (don't share non-zero rows) by color. Evaluate all columns in a group simultaneously with one perturbed residual.
+
+**Results**: N_s=25: 577 columns → 77 color groups (7.5x compression)
+
+| Method | Time (s) | Speedup |
+|--------|----------|---------|
+| Regular Sparse | 1.06 | 1.0x |
+| Compressed | 3.17 | 0.3x |
+
+**Why it doesn't help**: The sparse Jacobian already exploits locality extremely well:
+- Regular sparse: ~14,000 point evaluations (25 affected residuals × 577 columns)
+- Compressed: ~44,000 point evaluations (577 full residuals × 77 groups)
+
+The Lagrange interpolation creates such sparse coupling that direct computation outperforms grouped computation. Graph coloring would help with denser Jacobians but not with our 4-15% density structure.
+
+**Lesson**: The existing sparse Jacobian approach is already optimal for this problem's sparsity pattern.
+
+### Vectorized Residual Evaluation (SUCCESS!)
+
+After graph coloring failed, explored vectorizing the residual evaluation itself.
+
+**Approach**:
+1. Profile revealed 90% of time in interpolation (called with small 27-point batches)
+2. Batch all stencil points together: 577 × 27 = 15,579 points per residual call
+3. Single large interpolation call instead of many small ones
+4. Batch derivatives and expansion computation with Numba JIT + parallel
+
+**Key files created**:
+- `residual_vectorized.py` - Vectorized residual evaluator with Numba JIT
+- `jacobian_vectorized.py` - Vectorized sparse Jacobian computer
+
+**Performance (N_s=25, Schwarzschild)**:
+
+| Configuration | Time (s) | Speedup |
+|--------------|----------|---------|
+| Dense Jacobian + Regular Metric | 66.4 | 1.0x |
+| Dense Jacobian + Fast Metric | 26.7 | 2.5x |
+| Sparse Jacobian + Regular Metric | 5.5 | 12.1x |
+| Sparse Jacobian + Fast Metric | 3.4 | 19.5x |
+| **Vectorized Jacobian + Fast Metric** | **0.59** | **112.8x** |
+
+**Breakdown of improvements**:
+- Fast metric (Numba JIT): 2.5x
+- Sparse Jacobian (Lagrange locality): 5x additional
+- Vectorized batching: 5.8x additional
+- **Total: 112.8x speedup**
+
 ---
 
 ## Current Status
@@ -990,8 +1041,7 @@ Newton still converges correctly with Lagrange interpolation despite lower accur
 - **Core algorithm**: Working correctly with O(h²) convergence
 - **All metrics**: Schwarzschild, Kerr, Boosted variants - all working
 - **FastBoostedKerrMetric**: Semi-analytical approach with Numba JIT
-- **Sparse Jacobian**: 12x speedup using Lagrange interpolation
-- **Combined optimizations**: **20x total speedup** (67s → 3.4s at N_s=25)
+- **Vectorized Jacobian**: **112.8x total speedup** (66.4s → 0.59s at N_s=25)
 - **Gallery**: 18/19 horizons generated including diagonal boosts
-- **Total tests**: 112 passing
-- **Performance**: Major speedups from sparse Jacobian + Numba JIT metrics
+- **Total tests**: 115 passing
+- **Performance**: Vectorized Jacobian + Fast Metric is the recommended configuration
