@@ -107,6 +107,10 @@ class JacobianComputer:
         """
         Compute the full dense Jacobian matrix.
 
+        Note: Despite the local Cartesian stencil, the Jacobian is essentially
+        fully dense (98-100% fill) due to the spherical coordinate mapping
+        and interpolation spreading the coupling globally.
+
         Args:
             rho: Current surface values, shape (N_s, N_s)
 

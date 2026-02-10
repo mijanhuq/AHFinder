@@ -994,6 +994,137 @@ For a=0.5, M=1:
 
 ---
 
+---
+
+## 13. Sparse Jacobian with Lagrange Interpolation
+
+### Problem: Jacobian Density with Spline Interpolation
+
+Despite the local Cartesian stencil (27 points), the Jacobian was found to be 98-100% dense when using spline interpolation. This is because splines have global coupling—each interpolated value depends on all grid points along each coordinate direction.
+
+### Solution: Local Lagrange Interpolation
+
+Implemented local 4×4 Lagrange interpolation stencils that have truly local coupling (16 grid points per query).
+
+### Why Lagrange Over Splines?
+
+| Property | Spline (k=3) | Lagrange (4×4) | Winner |
+|----------|--------------|----------------|--------|
+| **Interpolation accuracy** | 9.0e-05 max error | 7.3e-04 max error | Spline |
+| **Interpolation speed** | 0.71 ms/10k pts | 0.35 ms/10k pts | **Lagrange (2x)** |
+| **Grid point dependencies** | 64-184 points | 16 points | **Lagrange** |
+| **Jacobian density** | 99.3% | 8.6% | **Lagrange (12x sparser)** |
+| **Newton convergence** | ✓ Converges | ✓ Converges | Tie |
+
+**Key insight**: Splines are more accurate, but that accuracy comes from global polynomial fitting that couples all grid points. Lagrange interpolation uses only a local 4×4 stencil, sacrificing some accuracy for true locality. Since Newton iteration converges correctly with either method, the 12x sparser Jacobian makes Lagrange the better choice for performance.
+
+### Test 13.1: Jacobian Sparsity Pattern
+
+**Purpose**: Visualize and compare Jacobian sparsity between interpolation methods.
+
+![Jacobian Sparsity Comparison](jacobian_sparsity_comparison.png)
+
+**Results** (N_s=17, 257×257 matrix):
+| Interpolation | Nonzeros | Density |
+|---------------|----------|---------|
+| Spline (k=3) | 65,585 | 99.3% |
+| Lagrange (4×4) | 5,701 | **8.6%** |
+
+The left plot (Spline) shows a nearly solid matrix—almost every entry is non-zero due to global coupling. The right plot (Lagrange) shows clear banded diagonal structure reflecting local coupling. Off-diagonal bands are due to periodic φ boundary wrapping.
+
+### Test 13.2: Sparse Jacobian Speedup
+
+**Purpose**: Measure performance improvement from sparse computation and sparse linear solver.
+
+**Method**: Full Schwarzschild horizon finding (N_s=17,21,25)
+
+| N_s | Dense Jacobian (s) | Sparse Jacobian (s) | Speedup |
+|-----|-------------------|---------------------|---------|
+| 17  | 13.5              | 2.5                 | **5.5x** |
+| 21  | 32.8              | 3.9                 | **8.5x** |
+| 25  | 67.3              | 5.6                 | **12.0x** |
+
+**Speedup sources**:
+1. Sparse Jacobian computation: Only evaluate affected residuals (~6,000 vs 66,000 for N_s=17)
+2. Sparse linear solver: `scipy.sparse.linalg.spsolve` exploits banded structure
+
+### Test 13.3: Newton Convergence with Sparse Jacobian
+
+**Purpose**: Verify Newton iteration converges correctly with Lagrange interpolation.
+
+**Results** (N_s=17, initial r=2.5):
+```
+Iter  0: ||F|| = 1.911e+00
+Iter  1: ||F|| = 2.035e+00
+Iter  2: ||F|| = 3.592e-01
+Iter  3: ||F|| = 1.709e-02
+Iter  4: ||F|| = 2.338e-05
+Iter  5: ||F|| = 3.302e-08
+Iter  6: ||F|| = 4.661e-11
+Converged in 7 iterations!
+Horizon radius: 2.0003 (expected: 2.0)
+```
+
+**Status**: ✓ PASS - Correct horizon found with sparse Jacobian
+
+### Test 13.4: Interpolation Accuracy
+
+**Purpose**: Compare Lagrange vs spline interpolation accuracy.
+
+**Test**: Interpolate smooth function ρ = 2 + 0.3 sin(2θ) cos(3φ) at 1000 random points.
+
+| Interpolation | Max Error | Mean Error |
+|---------------|-----------|------------|
+| Spline (k=3) | 9.0e-05 | 2.1e-05 |
+| Lagrange (4×4) | 7.3e-04 | 2.1e-04 |
+
+**Note**: Lagrange is less accurate but still sufficient for Newton convergence.
+
+### Usage
+
+```python
+finder = ApparentHorizonFinder(metric, N_s=25, use_sparse_jacobian=True)
+rho = finder.find()
+```
+
+**Status**: ✓ PASS - All sparse Jacobian tests passing
+
+### Test 13.5: Combined Optimization Performance
+
+**Purpose**: Measure total speedup with all optimizations combined.
+
+**Configuration Comparison** (N_s=25, Schwarzschild):
+
+| Configuration | Time (s) | Speedup | Notes |
+|--------------|----------|---------|-------|
+| Dense Jacobian + Regular Metric | 66.9 | 1.0x | Baseline |
+| Dense Jacobian + Fast Metric | 27.0 | 2.5x | Numba JIT metric |
+| Sparse Jacobian + Regular Metric | 5.5 | 12.1x | Lagrange interpolation |
+| **Sparse Jacobian + Fast Metric** | **3.4** | **19.9x** | Best combination |
+
+**Runtime Breakdown** (Sparse + Fast Metric, N_s=25):
+
+| Component | Time | % of Total |
+|-----------|------|------------|
+| Jacobian computation | 3.2s | 96% |
+| Residual evaluation | 0.1s | 4% |
+| Linear solve | 0.01s | <1% |
+
+**Inside Jacobian Computation**:
+
+| Sub-component | % |
+|---------------|---|
+| Lagrange interpolation | 29% |
+| Metric K computation | 27% |
+| Metric dgamma | 19% |
+| Metric gamma_inv | 12% |
+| Python overhead | 12% |
+| Expansion (Numba JIT) | 1% |
+
+**Status**: ✓ PASS - 20x total speedup achieved
+
+---
+
 ## Summary (Updated)
 
 | Component | Status | Tests |
@@ -1009,9 +1140,10 @@ For a=0.5, M=1:
 | Kerr Metric | ✓ PASS | 2/2 |
 | Boosted Metrics | ✓ PASS | 3/3 |
 | Fast Boosted Metrics | ✓ PASS | 5/5 |
-| **FastBoostedKerrMetric** | ✓ PASS | **20/20** |
+| FastBoostedKerrMetric | ✓ PASS | 20/20 |
+| **Sparse Jacobian** | ✓ PASS | **4/4** |
 
-**Total: 108/108 tests passing**
+**Total: 112/112 tests passing**
 
 ---
 

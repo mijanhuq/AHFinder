@@ -17,7 +17,7 @@ A complete Python implementation of an apparent horizon finder for black hole sp
 - Newton solver for locating surfaces where the expansion of outgoing null normals vanishes (Θ = 0)
 - Cartesian finite difference stencils to avoid coordinate singularities at poles
 - Support for Schwarzschild, Kerr, and Lorentz-boosted black hole metrics
-- Comprehensive test suite with 108 verified tests
+- Comprehensive test suite with 112 verified tests
 - Fast analytical boosted metrics with Numba JIT compilation
 - Gallery of 18 horizon visualizations including diagonal boosts
 
@@ -62,10 +62,12 @@ AHFinder/
 ├── src/ahfinder/           # Core algorithm
 │   ├── surface.py          # Surface mesh management
 │   ├── interpolation.py    # Biquartic interpolation
+│   ├── interpolation_lagrange.py  # Local Lagrange interpolation (Numba)
 │   ├── stencil.py          # 27-point Cartesian stencil
 │   ├── residual.py         # Expansion Θ computation
 │   ├── jacobian.py         # Numerical Jacobian
-│   ├── solver.py           # Newton iteration (dense or JFNK)
+│   ├── jacobian_sparse.py  # Sparse Jacobian with Lagrange
+│   ├── solver.py           # Newton iteration (dense, sparse, or JFNK)
 │   ├── finder.py           # High-level API
 │   ├── residual_fast.py    # Numba JIT expansion computation
 │   └── metrics/            # Spacetime metrics
@@ -76,7 +78,7 @@ AHFinder/
 │       ├── boosted.py
 │       ├── boosted_fast.py        # Fast analytical boosted metrics
 │       └── boosted_kerr_fast.py   # Semi-analytical boosted Kerr (Numba)
-├── tests/                  # Test suite (108 tests)
+├── tests/                  # Test suite (112 tests)
 │   ├── test_jacobian.py    # Critical row-sum tests
 │   ├── test_residual.py
 │   ├── test_boosted_kerr.py  # FastBoostedKerrMetric validation
@@ -156,13 +158,22 @@ The `FastBoostedKerrMetric` computes H and l numerically in the rest frame, then
 
 ### Solver Options
 
-Two solver modes are available:
+Three solver modes are available:
 
-1. **Dense Jacobian** (default): Computes the full Jacobian matrix at each Newton iteration. Recommended for typical problem sizes (N_s ≤ 33).
+1. **Dense Jacobian** (default): Computes the full Jacobian matrix at each Newton iteration.
 
-2. **Jacobian-Free Newton-Krylov (JFNK)**: Uses matrix-free GMRES with finite-difference matvec. May be useful for very large problems where O(n²) Jacobian storage is prohibitive.
+2. **Sparse Jacobian** (recommended for N_s ≥ 17): Uses local Lagrange interpolation to achieve truly sparse Jacobian computation with 5-12x speedup.
+
+3. **Jacobian-Free Newton-Krylov (JFNK)**: Uses matrix-free GMRES with finite-difference matvec. May be useful for very large problems where O(n²) Jacobian storage is prohibitive.
 
 ```python
+# Enable sparse Jacobian (recommended for larger grids)
+finder = ApparentHorizonFinder(
+    metric,
+    N_s=25,
+    use_sparse_jacobian=True  # 12x faster at N_s=25
+)
+
 # Enable JFNK solver
 finder = ApparentHorizonFinder(
     metric,
@@ -175,14 +186,32 @@ finder = ApparentHorizonFinder(
 
 ### Performance Optimizations
 
-The codebase includes Numba JIT-compiled implementations for improved performance:
+The codebase includes several optimizations for improved performance:
 
 | Optimization | Speedup | Notes |
 |-------------|---------|-------|
+| **Sparse Jacobian** | **5-12x** | Local Lagrange interpolation enables sparse computation |
 | Vectorized Christoffel computation | 2-3x | Replaced nested loops with `einsum` |
 | Numba JIT for `compute_expansion` | 29x | Inner expansion calculation |
 | `SchwarzschildMetricFast` | 2.5x | JIT-compiled metric components |
 | `FastBoostedKerrMetric` | ~10x | Semi-analytical approach with JIT |
+
+**Sparse Jacobian Details**: Using local 4×4 Lagrange interpolation instead of global splines reduces Jacobian density from 99% to 4-9%. Combined with sparse linear solvers:
+
+| N_s | Dense Jacobian (s) | Sparse Jacobian (s) | Speedup |
+|-----|-------------------|---------------------|---------|
+| 17  | 13.5              | 2.5                 | 5.5x    |
+| 21  | 32.8              | 3.9                 | 8.5x    |
+| 25  | 67.3              | 5.6                 | **12x** |
+
+**Combined Optimizations** (N_s=25): Using both sparse Jacobian and `SchwarzschildMetricFast`:
+
+| Configuration | Time | Speedup |
+|--------------|------|---------|
+| Dense Jacobian + Regular Metric | 67s | 1x |
+| **Sparse Jacobian + Fast Metric** | **3.4s** | **20x** |
+
+![Jacobian Sparsity](doc/jacobian_sparsity_comparison.png)
 
 To use the fast implementations:
 
@@ -254,11 +283,17 @@ This project demonstrates capabilities beyond simple code generation. Here's wha
 ### What the Human Brought
 
 - **Recognizing "wrongness"**: Knowing that Newton should converge from r₀=2.5, that Kerr(a=0) must match Schwarzschild, that boosted area can't be 13% larger
-- **Reviewing proposed tests and iterating with Claude for completeness** 
+- **Reviewing proposed tests and iterating with Claude for completeness**
 - **Strategic direction**: When to dig deeper vs. try a different approach
 - **Domain validation**: Is this physically reasonable? Does it match intuition from 30 years of experience?
 - **Architectural decisions**: What abstractions make sense? What's the right API?
-- **Pointing out approaches that the LLM might not have thought of** For example, in the evaluation of the boosted Kerr metric it was using numerical derivatives and that was slow. It did not try to improve that further and said symbolic manipulation was giving complex expressions. I then laid out an approach taking advantage of the Kerr-schild metric form. I asked it to use SageMath thereafer and it is on its way now. Bottom line, watch for possible simplifications or approaches that could boost Claude's work.
+- **Pointing out approaches that the LLM might not have thought of** For example, in the evaluation of the boosted Kerr metric it was using numerical derivatives and that was slow. It did not try to improve that further and said symbolic manipulation was giving complex expressions. I then laid out an approach taking advantage of the Kerr-Schild metric form. I asked it to use SageMath thereafter and it worked. Bottom line, watch for possible simplifications or approaches that could boost Claude's work.
+- **Performance optimization through domain insight**: The 20x speedup came from a series of human-guided explorations:
+  1. *"Why is the Jacobian dense when the stencil is local?"* — Claude investigated and found spline interpolation creates global coupling
+  2. *"Are there local interpolation methods like Lagrange?"* — Led to implementing 4×4 Lagrange stencils with true locality
+  3. *"Now that we have a sparse matrix, try LU-preconditioned CG again"* — Previously dismissed as slower, but now beneficial with sparse structure
+
+  This entire optimization journey was informed by Mijan's experience building the original AH finder. We revisited the same research decisions and trade-offs that were explored in the original PhD work—interpolation schemes, Jacobian structure, iterative vs. direct solvers—but now in hours instead of months. The human knew which knobs to turn because he had turned them before; Claude provided rapid implementation and systematic testing.
 ### The Collaboration Pattern
 
 The most effective pattern was **iterative refinement with physics constraints**:
@@ -270,6 +305,18 @@ Claude: "The boosted BH is moving—the metric isn't stationary.
         K_ij needs the time derivative term."
 Human: "That makes sense physically. Implement and verify."
 Claude: [Fixes, tests] "Area ratio now 0.9999."
+```
+
+**Performance optimization followed a similar pattern**:
+
+```
+Human: "The Jacobian should be sparse—our stencil is local."
+Claude: [Analyzes] "Actually it's 99% dense. Spline interpolation
+        couples all grid points globally."
+Human: "What about Lagrange interpolation? That's truly local."
+Claude: [Implements] "Now 4-9% dense. 12x speedup on Jacobian."
+Human: "With sparse matrices, try the CG approach again."
+Claude: [Tests ILU+BiCGSTAB] "Works now! Total 20x speedup."
 ```
 
 This is genuine collaboration: human provides the "should be" from physics intuition, AI provides the "why isn't it" through systematic investigation, together we reach "now it is."

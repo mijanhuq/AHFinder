@@ -837,3 +837,161 @@ For a=0.5, M=1:
 - **Gallery**: 18/19 horizons generated including diagonal boosts
 - **Total tests**: 108 passing (including 20 new boosted Kerr tests)
 - **Performance**: Significant speedups from Numba JIT and vectorization
+
+---
+
+## Session: 2026-02-10 - Sparse Jacobian Optimization
+
+### Prompt: Investigate Jacobian Sparsity
+
+**User Request**: Investigate why the Jacobian is dense and whether we can exploit sparsity.
+
+### Analysis: Why Spline Interpolation Causes Dense Jacobians
+
+Investigated the coupling structure of different interpolation methods:
+
+| Interpolation | Dependencies per query |
+|---------------|----------------------|
+| Spline (RectBivariateSpline) | 64-184 points (global) |
+| RegularGridInterpolator cubic | 184 points (still global!) |
+| RegularGridInterpolator linear | 4 points (local) |
+| **Lagrange 4×4 stencil** | **16 points (local)** |
+
+**Key insight**: Even though we use a local 27-point Cartesian stencil for derivatives, the interpolation spreads coupling globally when using splines. This makes the Jacobian 98-100% dense.
+
+### Solution: Local Lagrange Interpolation
+
+Implemented vectorized local Lagrange interpolation with Numba JIT:
+
+**File**: `src/ahfinder/interpolation_lagrange.py`
+```python
+@jit(nopython=True, cache=True, parallel=True)
+def interpolate_batch_lagrange(theta_arr, phi_arr, rho, theta_grid, phi_grid):
+    """Batch interpolation using local 4×4 Lagrange stencils."""
+    # Each interpolation depends on only 16 nearby grid points
+    ...
+```
+
+### Sparse Jacobian Implementation
+
+Created sparse Jacobian computation that exploits Lagrange locality:
+
+**File**: `src/ahfinder/jacobian_sparse.py`
+
+Key components:
+1. `LagrangeStencil`: Cartesian stencil using Lagrange interpolation with dependency tracking
+2. `SparseResidualEvaluator`: Tracks which grid points affect each residual
+3. `SparseJacobianComputer`: Only evaluates residuals affected by each perturbation
+
+### Integration with Solver
+
+Added `use_sparse_jacobian` option to `ApparentHorizonFinder` and `NewtonSolver`:
+
+```python
+finder = ApparentHorizonFinder(metric, N_s=25, use_sparse_jacobian=True)
+```
+
+When enabled:
+1. Uses Lagrange interpolation (4×4 local stencil)
+2. Computes sparse Jacobian (only affected entries)
+3. Uses sparse linear solver (`scipy.sparse.linalg.spsolve`)
+
+### Performance Results
+
+**Jacobian Sparsity** (N_s=17, 257×257 matrix):
+| Interpolation | Nonzeros | Density |
+|---------------|----------|---------|
+| Spline | 65,585 | 99.3% |
+| Lagrange | 5,701 | **8.6%** |
+
+**Full Horizon Finding Speedup**:
+| N_s | Dense Jacobian (s) | Sparse Jacobian (s) | Speedup |
+|-----|-------------------|---------------------|---------|
+| 17  | 13.5              | 2.5                 | **5.5x** |
+| 21  | 32.8              | 3.9                 | **8.5x** |
+| 25  | 67.3              | 5.6                 | **12.0x** |
+
+Speedup increases with grid size because sparsity improves (density 8.6% → 4.1%).
+
+### Visualization
+
+Created side-by-side spy plots showing Jacobian structure:
+
+![Jacobian Sparsity](doc/jacobian_sparsity_comparison.png)
+
+- Left (Spline): 99.3% dense - almost completely filled
+- Right (Lagrange): 8.6% dense - clear banded diagonal structure
+
+### Linear Solver Comparison
+
+Tested different sparse linear solvers:
+
+| Method | Time per iteration |
+|--------|-------------------|
+| spsolve (direct) | 2.5 ms |
+| ILU + BiCGSTAB (lagged) | 1.6 ms |
+| ILU + BiCGSTAB (fresh) | 3.5 ms |
+
+Lagged ILU preconditioner is fastest but linear solve is now <1% of total time, so impact is minimal.
+
+### Files Created/Modified
+
+**New Files**:
+1. `src/ahfinder/interpolation_lagrange.py` - Numba JIT Lagrange interpolator
+2. `src/ahfinder/jacobian_sparse.py` - Sparse Jacobian computation
+3. `examples/test_lagrange_interpolator.py` - Lagrange interpolator tests
+4. `examples/test_sparse_jacobian.py` - Sparse Jacobian tests
+5. `examples/plot_jacobian_sparsity.py` - Visualization script
+6. `doc/jacobian_sparsity_comparison.png` - Sparsity comparison plot
+
+**Modified Files**:
+1. `src/ahfinder/solver.py` - Added `use_sparse_jacobian` option
+2. `src/ahfinder/finder.py` - Added `use_sparse_jacobian` parameter
+
+### Trade-offs
+
+| Aspect | Spline | Lagrange |
+|--------|--------|----------|
+| Interpolation accuracy | Higher (9e-5) | Lower (7e-4) |
+| Interpolation speed | Slower | 2x faster |
+| Jacobian density | 99% | 4-9% |
+| Overall speedup | 1x | 5-12x |
+
+Newton still converges correctly with Lagrange interpolation despite lower accuracy.
+
+### Final Performance Summary
+
+**Combined Optimizations** (N_s=25, Schwarzschild):
+
+| Configuration | Time (s) | Speedup |
+|--------------|----------|---------|
+| Dense Jacobian + Regular Metric | 66.9 | 1.0x |
+| Dense Jacobian + Fast Metric | 27.0 | 2.5x |
+| Sparse Jacobian + Regular Metric | 5.5 | 12.1x |
+| **Sparse Jacobian + Fast Metric** | **3.4** | **19.9x** |
+
+**Runtime Breakdown** (best configuration):
+- Jacobian computation: 96%
+- Residual evaluation: 4%
+- Linear solve: <1%
+
+**Inside Jacobian**:
+- Lagrange interpolation: 29%
+- Metric K computation: 27%
+- Metric dgamma: 19%
+- Metric gamma_inv: 12%
+- Python overhead: 12%
+- Expansion (Numba JIT): 1%
+
+---
+
+## Current Status
+
+- **Core algorithm**: Working correctly with O(h²) convergence
+- **All metrics**: Schwarzschild, Kerr, Boosted variants - all working
+- **FastBoostedKerrMetric**: Semi-analytical approach with Numba JIT
+- **Sparse Jacobian**: 12x speedup using Lagrange interpolation
+- **Combined optimizations**: **20x total speedup** (67s → 3.4s at N_s=25)
+- **Gallery**: 18/19 horizons generated including diagonal boosts
+- **Total tests**: 112 passing
+- **Performance**: Major speedups from sparse Jacobian + Numba JIT metrics
