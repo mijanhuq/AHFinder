@@ -90,6 +90,8 @@ AHFinder/
 ├── gallery/                # Horizon visualizations
 │   ├── generate_gallery.py # Gallery generation script
 │   └── *.png               # 18 horizon images
+├── notebooks/
+│   └── interactive_horizon_finder.ipynb  # Interactive Jupyter demo
 ├── examples/
 │   ├── find_horizon.py     # Basic usage
 │   └── visualize_horizon.py
@@ -110,6 +112,23 @@ rho = finder.find(initial_radius=2.5, tol=1e-6)
 print(f"Horizon radius: {finder.horizon_radius_average(rho):.6f}")
 # Output: Horizon radius: 2.000290
 ```
+
+### Interactive Jupyter Notebook
+
+For an interactive demo with widgets to select spin, boost velocity, and view angle:
+
+```bash
+cd notebooks
+jupyter notebook interactive_horizon_finder.ipynb
+```
+
+**Features:**
+- Sliders for spin (a/M) and boost velocity (v/c)
+- Dropdown for boost direction (x, y, z, diagonal)
+- Interactive 3D plot with rotation controls
+- Quick example configurations
+
+**Requirements:** `pip install ipywidgets ipympl`
 
 ### Fast Boosted Metrics
 
