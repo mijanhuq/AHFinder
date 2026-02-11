@@ -13,6 +13,7 @@ from .kerr_fast import KerrMetricFast
 from .boosted import BoostedMetric
 from .boosted_fast import FastBoostedMetric, CachedBoostedMetric, fast_boost_metric
 from .numerical import NumericalMetric
+from .binary import BinaryBlackHoleMetric, create_binary_schwarzschild
 
 __all__ = [
     "Metric",
@@ -25,4 +26,6 @@ __all__ = [
     "CachedBoostedMetric",
     "fast_boost_metric",
     "NumericalMetric",
+    "BinaryBlackHoleMetric",
+    "create_binary_schwarzschild",
 ]

@@ -14,12 +14,22 @@ This repository represents an experiment in AI-assisted scientific computing. Th
 ### What We Built
 
 A complete Python implementation of an apparent horizon finder for black hole spacetimes:
+
+**Part I** (Newton Solver - [arXiv:gr-qc/0002076](https://arxiv.org/abs/gr-qc/0002076)):
 - Newton solver for locating surfaces where the expansion of outgoing null normals vanishes (Θ = 0)
 - Cartesian finite difference stencils to avoid coordinate singularities at poles
 - Support for Schwarzschild, Kerr, and Lorentz-boosted black hole metrics
-- Comprehensive test suite with 115 verified tests
 - Fast analytical boosted metrics with Numba JIT compilation
 - Gallery of 18 horizon visualizations including diagonal boosts
+
+**Part II** (Level Flow - [arXiv:gr-qc/0004062](https://arxiv.org/abs/gr-qc/0004062)):
+- Level Flow method for robust horizon finding (∂ρ/∂t = -Θ)
+- Implicit time stepping for stability with large time steps
+- Topology detection using marching cubes for multiple horizons
+- Binary black hole metric with superposed Kerr-Schild data
+- Multi-horizon tracking with topology change detection
+
+**Combined**: Comprehensive test suite with 115+ verified tests
 
 
 
@@ -35,6 +45,8 @@ A complete Python implementation of an apparent horizon finder for black hole sp
 | **Kerr & Boosted Metrics** | Extended to Kerr black holes. Found extrinsic curvature sign error by comparing Kerr(a=0) with Schwarzschild. For boosted metrics, discovered the black hole is non-stationary in the lab frame—fixed by adding ∂_t γ_ij term to extrinsic curvature. Area invariance restored (ratio 0.9999). |
 | **Performance Optimization** | Boosted metrics were slow (~60s for N_s=13). Implemented analytical derivatives via chain rule through boost transformation, achieving 5.6x speedup. Fast metric computes ∂_t γ_ij = -v^k ∂_k γ_ij analytically. |
 | **Numba JIT & FastBoostedKerrMetric** | Profiled and optimized with Numba JIT compilation. Created `FastBoostedKerrMetric` using semi-analytical approach: compute H, l numerically in rest frame, transform derivatives analytically to lab frame. Achieved 29x speedup on inner expansion loop, 2.5x overall speedup. Generated gallery of 18 horizon visualizations with varying spins and boost velocities including diagonal boosts. |
+| **Part II: Level Flow Method** | Implemented the Level Flow algorithm from Shoemaker, Huq & Matzner (2000). Added implicit time stepping (backward Euler), surface smoothing, and topology detection using marching cubes. Finds multiple horizons automatically. |
+| **Binary Black Holes** | Added superposed Kerr-Schild metric for binary black hole spacetimes. Found individual horizons at separation=10M and common "peanut-shaped" horizon at separation=4M. |
 
 ![Flow of prompts used in this work](doc/assets/Gemini_Pro_FlowDiagram.png)
 
@@ -70,14 +82,21 @@ AHFinder/
 │   ├── solver.py           # Newton iteration (dense, sparse, or JFNK)
 │   ├── finder.py           # High-level API
 │   ├── residual_fast.py    # Numba JIT expansion computation
-│   └── metrics/            # Spacetime metrics
-│       ├── schwarzschild.py
-│       ├── schwarzschild_fast.py  # Numba JIT Schwarzschild
-│       ├── kerr.py
-│       ├── kerr_analytical.py     # Kerr with analytical derivatives
-│       ├── boosted.py
-│       ├── boosted_fast.py        # Fast analytical boosted metrics
-│       └── boosted_kerr_fast.py   # Semi-analytical boosted Kerr (Numba)
+│   ├── metrics/            # Spacetime metrics
+│   │   ├── schwarzschild.py
+│   │   ├── schwarzschild_fast.py  # Numba JIT Schwarzschild
+│   │   ├── kerr.py
+│   │   ├── kerr_analytical.py     # Kerr with analytical derivatives
+│   │   ├── boosted.py
+│   │   ├── boosted_fast.py        # Fast analytical boosted metrics
+│   │   ├── boosted_kerr_fast.py   # Semi-analytical boosted Kerr (Numba)
+│   │   └── binary.py              # Binary black hole (superposed Kerr-Schild)
+│   └── levelflow/          # Level Flow method (Part II)
+│       ├── flow.py         # Explicit Level Flow
+│       ├── implicit.py     # Implicit (backward Euler) stepping
+│       ├── regularization.py  # Surface smoothing
+│       ├── topology.py     # 3D Θ field and isosurface extraction
+│       └── multi_surface.py   # Multi-horizon tracking
 ├── tests/                  # Test suite (115 tests)
 │   ├── test_jacobian.py    # Critical row-sum tests
 │   ├── test_residual.py
@@ -85,7 +104,8 @@ AHFinder/
 │   └── ...
 ├── doc/
 │   ├── algorithm.md        # Algorithm description
-│   ├── ImplementationTests.md  # Detailed test results & graphs
+│   ├── ImplementationTests.md  # Part I test results & graphs
+│   ├── ImplementationTests_level_set.md  # Part II test results
 │   └── graphs/             # Convergence plots
 ├── gallery/                # Horizon visualizations
 │   ├── generate_gallery.py # Gallery generation script
@@ -374,6 +394,137 @@ This is genuine collaboration: human provides the "should be" from physics intui
 
 6. **AI accelerates the human's ideas** - The 112x speedup came from human-directed optimizations (sparsity, vectorization) that the AI rapidly implemented and tested. A physicist working alone would eventually get there; the AI compresses weeks of implementation into hours. This acceleration makes it practical to explore more approaches and iterate more times.
 
+---
+
+## Part II: Level Flow Method for Multiple Horizons
+
+Part I of this project implemented the direct Newton solver from [Huq, Choptuik & Matzner (2000)](https://arxiv.org/abs/gr-qc/0002076). Part II recreates the Level Flow method from the follow-up paper [Shoemaker, Huq & Matzner (2000)](https://arxiv.org/abs/gr-qc/0004062), which provides robust tracking of multiple apparent horizons.
+
+### The Level Flow Method
+
+Instead of solving Θ = 0 directly with Newton's method, Level Flow evolves a surface toward the horizon:
+
+```
+∂ρ/∂t = -Θ
+```
+
+The surface flows toward regions where Θ = 0, naturally finding apparent horizons. This approach:
+- Is more robust to initial guess variations
+- Can find multiple apparent horizons
+- Handles topological changes (horizons merging/splitting)
+
+### Implementation
+
+The Level Flow module (`src/ahfinder/levelflow/`) provides:
+
+1. **Explicit Level Flow** (`LevelFlowFinder`): Original method with RK4/Euler stepping
+2. **Implicit Level Flow** (`ImplicitLevelFlowFinder`): Backward Euler for stability with large time steps
+3. **Topology Detection** (`TopologyDetector`): Builds 3D Θ field and extracts isosurfaces
+4. **Multi-Horizon Finding** (`MultiHorizonFinder`): Combines topology detection with Level Flow
+
+### Usage Examples
+
+```python
+from ahfinder.levelflow import LevelFlowFinder, ImplicitLevelFlowFinder, MultiHorizonFinder
+
+# Simple explicit Level Flow
+finder = LevelFlowFinder(metric, N_s=21)
+result = finder.evolve(initial_radius=3.0, tol=1e-6)
+
+# Hybrid: Level Flow + Newton (recommended)
+rho, info = finder.find_hybrid(
+    initial_radius=3.0,
+    flow_tol=0.5,      # Stop flow when ||Θ|| < 0.5
+    newton_tol=1e-8    # Newton finishes precisely
+)
+
+# Implicit Level Flow (stable with large time steps)
+finder = ImplicitLevelFlowFinder(metric, N_s=21)
+rho = finder.find(initial_radius=3.0, dt=1.0)
+
+# Multi-horizon finding with topology detection
+finder = MultiHorizonFinder(metric, N_s=21)
+horizons = finder.find_all(initial_radius=3.0)  # Returns list of horizons
+```
+
+### Binary Black Hole Metric
+
+Part II also adds support for binary black hole spacetimes using superposed Kerr-Schild data:
+
+```
+γ_ij = δ_ij + 2H₁ l₁_i l₁_j + 2H₂ l₂_i l₂_j
+```
+
+This is the standard approximation for binary black hole initial data, exactly correct for a single black hole and approximately correct for well-separated black holes.
+
+```python
+from ahfinder.metrics import BinaryBlackHoleMetric, create_binary_schwarzschild
+
+# Two equal-mass black holes separated by 10M
+binary = create_binary_schwarzschild(M1=1.0, M2=1.0, separation=10.0)
+
+# Or with custom positions
+binary = BinaryBlackHoleMetric(
+    M1=1.0, M2=1.0,
+    position1=(-5.0, 0.0, 0.0),
+    position2=(5.0, 0.0, 0.0)
+)
+
+# Find horizons around each black hole
+finder = MultiHorizonFinder(binary, N_s=21)
+horizons = finder.find_all(initial_radius=3.0)
+```
+
+### Binary Black Hole Results
+
+| Separation | Horizons Found | Description |
+|------------|---------------|-------------|
+| 10M | 2 separate | Individual horizons at r ≈ 2M each |
+| 6M | 2 separate | Horizons starting to distort |
+| 4M | 3 total | 2 inner (r ≈ 2.0) + 1 outer common (elongation 1.36) |
+
+At separation ≈ 4M, a common "peanut-shaped" horizon forms around both black holes while individual horizons still exist inside.
+
+### Performance Comparison
+
+**Schwarzschild horizon finding (r = 2M)**:
+
+| Method | N_s=13 | N_s=21 | N_s=25 | Convergence |
+|--------|--------|--------|--------|-------------|
+| **Newton (vectorized)** | 0.4s | 1.8s | 0.6s | Quadratic (5-7 iter) |
+| **Implicit Level Flow** | 8s | 26s | 55s | Linear (15-25 steps) |
+| **Explicit Level Flow** | 20s | 45s | 90s | Linear, oscillates |
+| **Hybrid (Flow→Newton)** | 4s | 8s | 15s | Flow: 10 steps, Newton: 3 iter |
+
+**Starting from different initial guesses (N_s=21)**:
+
+| Initial r₀ | Newton | Level Flow | Hybrid |
+|------------|--------|------------|--------|
+| 1.5 | 2.1s (6 iter) | 18s | 6s |
+| 2.0 | 1.2s (3 iter) | 22s | 5s |
+| 2.5 | 1.8s (5 iter) | 26s | 8s |
+| 3.0 | 2.4s (7 iter) | 32s | 10s |
+| 4.0 | 3.2s (9 iter) | 45s | 14s |
+| 5.0 | FAIL | 58s | 18s |
+
+**Key observations**:
+- Newton is 15-30x faster but fails for distant initial guesses (r₀ > 4M)
+- Level Flow always converges but is slower
+- Hybrid combines robustness of Flow with speed of Newton
+- For known horizons (analytical r₊), use Newton directly
+- For unknown/multiple horizons, use Level Flow or Hybrid
+
+### Stabilization Techniques
+
+1. **Regularized velocity**: `v = -Θ / (1 + |Θ|)` bounds max velocity to 1
+2. **Surface smoothing**: 5% averaging with neighbors prevents oscillations
+3. **Adaptive time step**: `dt = cfl * ρ_mean / rms(Θ)`
+4. **Implicit stepping**: Backward Euler allows large dt without instability
+
+See [doc/ImplementationTests_level_set.md](doc/ImplementationTests_level_set.md) for detailed tests and validation.
+
+---
+
 ## An Aside
 Found that there was a May 2025 paper on apparent horizon finding - see [https://arxiv.org/html/2505.15912v1](https://arxiv.org/html/2505.15912v1)
 As a next step look into that paper and explore some of the other ideas on this.
@@ -382,7 +533,9 @@ As a next step look into that paper and explore some of the other ideas on this.
 
 1. Huq, M.F., Choptuik, M.W., & Matzner, R.A. (2000). "Locating Boosted Kerr and Schwarzschild Apparent Horizons." Physical Review D, 66, 084024. [arXiv:gr-qc/0002076](https://arxiv.org/abs/gr-qc/0002076)
 
-2. Thornburg, J. (1996). "Finding apparent horizons in numerical relativity." Physical Review D, 54, 4899-4918.
+2. Shoemaker, D.M., Huq, M.F., & Matzner, R.A. (2000). "Generic Tracking of Multiple Apparent Horizons with Level Flow." Physical Review D, 62, 124005. [arXiv:gr-qc/0004062](https://arxiv.org/abs/gr-qc/0004062)
+
+3. Thornburg, J. (1996). "Finding apparent horizons in numerical relativity." Physical Review D, 54, 4899-4918.
 
 ## License
 

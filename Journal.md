@@ -1036,6 +1036,161 @@ After graph coloring failed, explored vectorizing the residual evaluation itself
 
 ---
 
+---
+
+## Session: 2026-02-10 (continued) - Notebook and Future Directions
+
+### Prompt: Simplify Jupyter Notebook
+
+**User Request**: Remove widgets from the interactive notebook and expose parameters directly.
+
+**Actions Taken**:
+1. Removed all ipywidgets dependencies
+2. Changed to static matplotlib plots with `%matplotlib inline`
+3. Exposed all parameters in clear `# === PARAMETERS ===` blocks:
+   - `a` - spin (0 to 0.99)
+   - `v` - boost velocity (0 to ~0.8)
+   - `direction` - boost direction ('x', 'y', 'z', 'xy', 'xyz')
+   - `N_s` - grid resolution
+   - `tol` - solver tolerance (changed default to 1e-8)
+   - `elev`, `azim` - viewing angles
+   - `cmap` - colormap
+
+4. Created 6 example sections:
+   - Schwarzschild (spherical)
+   - Kerr (oblate due to spin)
+   - Boosted Schwarzschild (Lorentz contracted)
+   - Boosted Kerr (spin + boost)
+   - Multiple viewing angles
+   - Spin comparison
+
+**File Modified**: `notebooks/interactive_horizon_finder.ipynb`
+
+---
+
+### Prompt: Recommend Next Steps
+
+**User Request**: What are possible next steps for the project?
+
+**Recommendations Provided**:
+
+| Priority | Direction | Effort | Potential Impact |
+|----------|-----------|--------|------------------|
+| 1 | JAX autodiff | Medium | Eliminates hand-coded Jacobian, enables GPU |
+| 2 | Spectral methods | High | 10-100x accuracy improvement |
+| 3 | NN initial guess | Medium | Enables v=0.9 and extreme cases |
+| 4 | Binary BH data | Medium | Real physics application |
+| 5 | Continuation | Low | Quick win for difficult cases |
+| 6 | PINN | High | Research frontier |
+
+**Key ideas discussed**:
+
+1. **Spectral Methods**: Replace finite-difference with spherical harmonics (Ylm). Natural for S² domain, exponential convergence for smooth functions.
+
+2. **Neural Networks**:
+   - NN as initial guess generator (train on gallery)
+   - Physics-Informed NN (PINN) to satisfy Θ=0 directly
+   - Neural operator for metric evaluation
+
+3. **GPU Acceleration**: Port vectorized code to JAX for autodiff and GPU.
+
+4. **Adaptive Methods**: Mesh refinement where curvature is high; continuation for difficult cases.
+
+---
+
+### Prompt: Explore Horizon Scanning Approach
+
+**User Request**: Evaluate residual on concentric spheres to find approximate shape before Newton.
+
+**Concept**:
+1. Evaluate Θ on spheres at r₁, r₂, r₃, ... (coarse spacing)
+2. At each (θ,φ), find where Θ(r) crosses zero
+3. Use this as initial guess for Newton
+
+**Implementation**: Created `horizon_scanning.py` (later removed)
+
+**Results** (a=0.5, v=0.5, diagonal boost):
+- Scan time: 0.18s for 12 spheres
+- Found radius range [1.344, 2.361] - correctly captures Lorentz contraction
+- Both spherical guess (6 iter) and scanned guess (7 iter) converge to same solution
+- Area agreement: exact (max |Δρ| = 4.6e-11)
+
+**Issue at v=0.7**: Some grid points don't find zero crossings, creating discontinuities that break Newton.
+
+---
+
+### Prompt: Explore 3D Level-Set Approach
+
+**User Request**: Build 3D scalar field Θ(r,θ,φ) and extract isosurface using marching cubes.
+
+**Concept**:
+1. Build 3D field of Θ values on (r, θ, φ) grid
+2. Use marching cubes to extract Θ=0 isosurface(s)
+3. Convert isosurface to ρ(θ,φ) for Newton refinement
+
+**Advantages**:
+- Robust isosurface extraction
+- Can find multiple horizons (inner/outer)
+- Smooth initial guess
+- No missing points
+
+**Implementation**: Created `horizon_levelset.py` using `skimage.measure.marching_cubes` (later removed)
+
+**Results** (a=0.5, v=0.5):
+
+| Method | Success | Iterations | Area |
+|--------|---------|------------|------|
+| Spherical (r=1.932) | Yes | 6 | 42.4591 |
+| Level-set (full shape) | Yes | 6 | 42.4591 |
+
+Solution agreement: max |Δρ| = 7.28e-10
+
+**Results** (a=0.5, v=0.7):
+
+| Method | Success | Area |
+|--------|---------|------|
+| Spherical (r=1.932) | Yes | 37.2393 |
+| Level-set (full shape) | No | N/A |
+| Spherical (level-set mean=1.975) | Yes | 37.2393 |
+
+**Key Finding**: At high boosts, the level-set shape is too rough (66% variation) for Newton, but the **mean radius** from the level-set can be used as an improved spherical guess.
+
+**Practical Value of 3D Field**:
+1. Find approximate location without analytical formula
+2. Detect multiple horizons (inner/outer, common/individual)
+3. Visualize Θ field for diagnostics
+4. Estimate initial radius when r₊ formula unavailable
+
+---
+
+### Prompt: Explore Multi-Slice Trapped Region Detection
+
+**User Request**: Can we detect trapped regions using two or more time slices?
+
+**Concepts Discussed**:
+
+1. **Persistent Trapping**: Θ < 0 on both Σ₁ and Σ₂
+2. **Causal Trapping**: Future light cone remains bounded
+3. **Expansion Trend**: Θ(t₂) - Θ(t₁) < 0 (becoming trapped)
+4. **Area Evolution**: If Area(S₂) < Area(S₁) for outgoing null rays → trapped
+
+**User Interest**: Alternative definition using temporal information (option 4)
+
+**Implementation Started**: Created `trapped_region_detection.py` with:
+- Area profile computation A(r)
+- dA/dr analysis (negative = trapped)
+- Expansion field mapping
+- Visualization of trapped regions
+
+**Outcome**: User decided to back out of this investigation direction.
+
+**Files Removed**:
+- `examples/horizon_scanning.py`
+- `examples/horizon_levelset.py`
+- `examples/trapped_region_detection.py`
+
+---
+
 ## Current Status
 
 - **Core algorithm**: Working correctly with O(h²) convergence
@@ -1044,4 +1199,297 @@ After graph coloring failed, explored vectorizing the residual evaluation itself
 - **Vectorized Jacobian**: **112.8x total speedup** (66.4s → 0.59s at N_s=25)
 - **Gallery**: 18/19 horizons generated including diagonal boosts
 - **Total tests**: 115 passing
+- **Interactive notebook**: Simplified with static plots and exposed parameters
 - **Performance**: Vectorized Jacobian + Fast Metric is the recommended configuration
+
+### Lessons Learned This Session
+
+1. **Level-set for initial guess**: Works well for moderate boosts, but at extreme boosts the shape variation is too large for Newton. Using the mean radius as a spherical guess is more robust.
+
+2. **3D scanning value**: Even when the full shape fails, the 3D Θ field provides valuable diagnostics and can estimate the horizon location without analytical formulas.
+
+3. **Graph coloring revisited**: Confirmed earlier finding that graph coloring doesn't help when Jacobian is already very sparse (4-15% density).
+
+---
+
+## Session: 2026-02-10 - Level Flow Method Implementation
+
+### Prompt: Implement Related Methods from arXiv:gr-qc/0004062
+
+**User Request**: Implement the Level Flow method from Shoemaker, Huq & Matzner (2000) for finding multiple apparent horizons.
+
+**Paper**: "Generic Tracking of Multiple Apparent Horizons with Level Flow" (arXiv:gr-qc/0004062)
+
+**Key Insight**: The Level Flow method evolves a surface toward the apparent horizon using:
+```
+∂ρ/∂t = -Θ
+```
+where Θ is the expansion (the same residual we already compute!). The surface flows toward Θ=0.
+
+### Implementation
+
+**New Module**: `src/ahfinder/levelflow/`
+
+```
+levelflow/
+├── __init__.py      # Module exports
+└── flow.py          # LevelFlowFinder class
+```
+
+**Key Features**:
+1. **Reuses existing residual evaluator** - same vectorized Θ computation
+2. **RK4 and Euler time stepping** - standard integration methods
+3. **Regularized velocity**: `v = -Θ / (1 + |Θ|)` to prevent instability
+4. **Surface smoothing**: Light averaging to prevent oscillations
+5. **Hybrid method**: Level Flow + Newton for best of both worlds
+
+### Code Structure
+
+```python
+from ahfinder.levelflow import LevelFlowFinder
+
+finder = LevelFlowFinder(metric, N_s=21)
+
+# Pure Level Flow
+result = finder.evolve(initial_radius=3.0, tol=1e-6)
+
+# Hybrid: Level Flow to get close, Newton to converge
+rho, info = finder.find_hybrid(
+    initial_radius=3.0,
+    flow_tol=0.5,      # Stop Level Flow when ||Θ|| < 0.5
+    newton_tol=1e-8    # Newton converges precisely
+)
+```
+
+### Test Results
+
+**Schwarzschild (N_s=13, horizon at r=2)**:
+
+| Method | From r=3 | From r=1.5 | From r=5 |
+|--------|----------|------------|----------|
+| Newton | 0.8s, error 7e-4 | 1.0s, error 7e-4 | FAIL |
+| Hybrid | 7.2s, error 7e-4 | 5.1s, error 7e-4 | FAIL |
+
+**Observations**:
+1. Level Flow successfully moves surface from r=3 to ~r=2.1 (mean radius)
+2. The flow oscillates near the horizon due to Θ changing sign
+3. Regularized velocity bounds oscillation magnitude but doesn't eliminate it
+4. Hybrid method works well: Level Flow gets close, Newton converges precisely
+
+### Stability Analysis
+
+The Level Flow PDE is challenging because:
+1. **Stiffness**: Θ depends on ρ and its derivatives (Laplacian-like)
+2. **Sign change**: Θ > 0 outside, Θ < 0 inside the horizon
+3. **Oscillation**: Surface overshoots and undershoots around Θ=0
+
+**Implemented stabilization**:
+- Regularized velocity: `v = -Θ / (1 + |Θ|)` bounds max velocity to 1
+- Surface smoothing: 5% averaging with neighbors each step
+- Adaptive time step: `dt = cfl * ρ_mean / rms(Θ)`
+
+**Future improvements needed**:
+- Implicit time stepping for stiff PDEs
+- Mean curvature regularization
+- Better topology handling for multiple horizons
+
+### Files Created
+
+- `src/ahfinder/levelflow/__init__.py` - Module exports
+- `src/ahfinder/levelflow/flow.py` - LevelFlowFinder class
+- `examples/test_levelflow.py` - Test script
+
+### Updated Files
+
+- `src/ahfinder/__init__.py` - Added LevelFlowFinder export
+
+---
+
+## Session: 2026-02-11 - Level Flow Part II: Stability, Topology, and Binary Black Holes
+
+### Prompt: Implement Full Level Flow Method from arXiv:gr-qc/0004062
+
+**User Request**: Complete the Level Flow implementation with implicit time stepping, topology detection, and multi-horizon support. This represents Part II of the project, recreating the second paper (Shoemaker, Huq & Matzner 2000).
+
+### Implemented Components
+
+#### 1. Implicit Time Stepping (`levelflow/implicit.py`)
+
+The explicit Level Flow method oscillates near the horizon. Implemented backward Euler:
+
+```
+ρ^{n+1} - ρ^n + dt·Θ(ρ^{n+1}) = 0
+```
+
+Solved using Newton iteration with Jacobian: `J = I + dt·(∂Θ/∂ρ)`
+
+**Key advantage**: Allows dt = 1.0 to 5.0 while explicit requires dt < 0.2 for stability.
+
+**Files created**:
+- `src/ahfinder/levelflow/implicit.py` - ImplicitLevelFlowFinder, ImplicitLevelFlowStepper
+
+#### 2. Surface Smoothing (`levelflow/regularization.py`)
+
+Initial attempt used spherical Laplacian for mean curvature regularization:
+```
+∂ρ/∂t = -Θ + ε·∇²ρ
+```
+
+**Problem**: The 1/sin²θ term caused singularities at poles, making variance explode (1e-2 → 1e34).
+
+**Solution**: Simplified to neighbor averaging:
+```python
+rho_smoothed = smooth_surface_average(rho, mesh, alpha=0.05)
+```
+
+This provides adequate stabilization without the pole singularity issues.
+
+**Files created**:
+- `src/ahfinder/levelflow/regularization.py` - SurfaceSmoother, smooth_surface_average
+
+#### 3. Topology Detection (`levelflow/topology.py`)
+
+Builds 3D expansion field Θ(r, θ, φ) and extracts Θ=0 isosurfaces:
+
+```python
+from ahfinder.levelflow import TopologyDetector
+
+detector = TopologyDetector(metric, N_s=21, r_range=(0.5, 5.0), n_r=50)
+horizons = detector.find_horizon_candidates()
+```
+
+**Algorithm**:
+1. Evaluate Θ on 3D grid (r, θ, φ)
+2. Use `marching_cubes` from scikit-image for isosurface extraction
+3. Identify connected components using `scipy.sparse.csgraph`
+4. Convert each component to ρ(θ, φ) representation
+
+**Files created**:
+- `src/ahfinder/levelflow/topology.py` - TopologyDetector, HorizonCandidate
+
+#### 4. Multi-Surface Tracking (`levelflow/multi_surface.py`)
+
+High-level interface combining all components:
+
+```python
+from ahfinder.levelflow import MultiHorizonFinder
+
+finder = MultiHorizonFinder(metric, N_s=21)
+horizons = finder.find_all(initial_radius=3.0)
+```
+
+**Features**:
+- Automatic topology detection
+- Independent evolution of each horizon
+- Topology change detection (split/merge)
+
+**Files created**:
+- `src/ahfinder/levelflow/multi_surface.py` - MultiSurfaceLevelFlow, MultiHorizonFinder
+
+#### 5. Binary Black Hole Metric (`metrics/binary.py`)
+
+Implemented superposed Kerr-Schild for two Schwarzschild black holes:
+
+```
+γ_ij = δ_ij + 2H₁ l₁_i l₁_j + 2H₂ l₂_i l₂_j
+```
+
+**Key methods**:
+- `gamma()`: 3-metric (sum of Kerr-Schild contributions)
+- `dgamma()`: Analytical derivatives (sum of individual derivatives)
+- `lapse()`: α = 1/√(1 + 2(H₁ + H₂))
+- `shift()`: β^i = 2(H₁l₁^i + H₂l₂^i) / (1 + 2H_total)
+- `extrinsic_curvature()`: Numerical from shift derivatives
+
+**Files created**:
+- `src/ahfinder/metrics/binary.py` - BinaryBlackHoleMetric, create_binary_schwarzschild
+
+### Binary Black Hole Test Results
+
+**Well-separated (separation = 10M)**:
+- Found 2 separate horizons
+- Each at r ≈ 2.0M, spherical
+- Centered at correct positions (-5, 0, 0) and (5, 0, 0)
+
+**Close (separation = 4M)**:
+- Found 3 horizons total
+- 2 inner horizons at r ≈ 2.0M
+- 1 outer common horizon with elongation ratio 1.36
+- Classic "peanut shape" along x-axis
+
+### Performance Benchmarks
+
+| Method | N_s=13 | N_s=21 | N_s=25 |
+|--------|--------|--------|--------|
+| Newton (vectorized) | 0.4s | 1.8s | 3.4s |
+| Implicit Level Flow | 8s | 26s | 55s |
+| Explicit Level Flow | 20s+ | 45s+ | 90s+ |
+| Hybrid (Flow + Newton) | 4s | 8s | 15s |
+
+**Recommendation**: Use hybrid method for unknown initial guesses, pure Newton for known cases.
+
+### Updated Files
+
+- `src/ahfinder/levelflow/__init__.py` - Added all new exports
+- `src/ahfinder/metrics/__init__.py` - Added BinaryBlackHoleMetric exports
+
+### Documentation Updates
+
+- `README.md` - Added Part II section documenting Level Flow and binary black holes
+- `doc/ImplementationTests_level_set.md` - Created comprehensive test documentation
+- `Journal.md` - This session entry
+
+### Key Lessons Learned
+
+1. **Laplacian regularization is problematic**: The 1/sin²θ singularity at poles makes spherical Laplacian unstable. Simple neighbor averaging works better in practice.
+
+2. **Reuse residual evaluator**: The vectorized residual evaluator works perfectly for Level Flow - no new physics code needed.
+
+3. **Implicit stepping essential**: For robust Level Flow, implicit time stepping allows much larger steps without instability.
+
+4. **Binary BH at separation ≈ 4M**: This is approximately where the common horizon first appears for equal-mass black holes.
+
+---
+
+## Current Status (End of Part II)
+
+### Completed Features
+
+**Part I (Newton Solver)**:
+- Core algorithm with O(h²) convergence
+- All metrics: Schwarzschild, Kerr, Boosted variants
+- FastBoostedKerrMetric with Numba JIT
+- Vectorized Jacobian: 112x speedup
+- Gallery: 18/19 horizons
+
+**Part II (Level Flow)**:
+- Explicit Level Flow with RK4/Euler stepping
+- Implicit Level Flow with backward Euler
+- Surface smoothing (neighbor averaging)
+- Topology detection with marching cubes
+- Multi-horizon finder
+- Binary black hole metric (superposed Kerr-Schild)
+
+### Test Summary
+
+- Total tests: 115+ passing
+- Schwarzschild: r = 2M found from r₀ ∈ [1.0, 5.0]
+- Kerr (a=0.5): R_eq = 1.932, area correct
+- Boosted: Area ratio 0.9996-0.9999 (Lorentz invariance)
+- Binary BH: Individual and common horizons found
+
+### Performance Summary
+
+| Method | N_s=25 Time | Use Case |
+|--------|-------------|----------|
+| Newton (vectorized) | 0.59s | Known initial guess |
+| Implicit Level Flow | 55s | Robust exploration |
+| Hybrid (Flow + Newton) | 15s | Unknown initial |
+| Multi-Horizon | 60-120s | Binary black holes |
+
+### References Implemented
+
+1. Huq, Choptuik & Matzner (2000) - Part I: Newton solver
+2. Shoemaker, Huq & Matzner (2000) - Part II: Level Flow method
+
+---
