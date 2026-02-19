@@ -1,6 +1,23 @@
-# AHFinder: Apparent Horizon Finder
+# Implementation of Apparent Horizon Finders using AI assisted Coding
 
-An implementation of the apparent horizon location algorithm from [Huq, Choptuik & Matzner (2000)](https://arxiv.org/abs/gr-qc/0002076), recreated through AI-assisted coding.
+## *An AI Physicist you say? Could that be possible?*
+Well, at the very least an AI Physicist coding and universal knowledge partner for a Human Physicist perhaps? 
+
+In this project, I experimented with exactly those notions. I went back down memory lane to my Ph.D work and subsequent 
+work. I used Claude Code to implement methodology from two separate papers:
+1. Huq, M.F., Choptuik, M.W., & Matzner, R.A. (2000). "Locating Boosted Kerr and Schwarzschild Apparent Horizons." Physical Review D, 66, 084024. [arXiv:gr-qc/0002076](https://arxiv.org/abs/gr-qc/0002076)
+2. Shoemaker, D.M., Huq, M.F., & Matzner, R.A. (2000). "Generic Tracking of Multiple Apparent Horizons with Level Flow." Physical Review D, 62, 124005. [arXiv:gr-qc/0004062](https://arxiv.org/abs/gr-qc/0004062)
+
+In the first, in about 12 hours spread out over a weeks timeframe, I was able to reimplementation the apparent horizon 
+location algorithm alongside Claude code. Claude code, generated the Python code and ran tests and iterated with me through 
+the whole process. Interestingly, in the process of implementation we ran across the same issues I had faced almost 30 years ago. Claude does great in generating code and proposing possible solutions but the ultimate solution required me guiding it through testing and choices of methods that led to good outcomes.
+
+In the second paper, building building on the first, we (Claude and I) were able to put together a level-flow below in a matter of 2-3 hours reusing code from the first. 
+
+What this experiment showed me was that with the right prompting, review, insistence of testing and mutual iteration with Claude, ones ability to try out new ideas and implement fairly technical things is a game-changer, if used correctly. 
+Given the AI's access to universal knowledge and access to numerical methods and packages, it truly empowers the the user. It also is easy to get lost in what the LLM produces and thus on both sides, one must iterate on prompts in bite sized chunks in not only the AI's context but the human's context.
+
+What follows are some details of the experimentation. 
 
 ## The Experiment
 
