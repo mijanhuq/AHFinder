@@ -8,7 +8,7 @@ work. I used Claude Code to implement methodology from two separate papers:
 1. Huq, M.F., Choptuik, M.W., & Matzner, R.A. (2000). "Locating Boosted Kerr and Schwarzschild Apparent Horizons." Physical Review D, 66, 084024. [arXiv:gr-qc/0002076](https://arxiv.org/abs/gr-qc/0002076)
 2. Shoemaker, D.M., Huq, M.F., & Matzner, R.A. (2000). "Generic Tracking of Multiple Apparent Horizons with Level Flow." Physical Review D, 62, 124005. [arXiv:gr-qc/0004062](https://arxiv.org/abs/gr-qc/0004062)
 
-In the first, in about 12 hours spread out over a weeks timeframe, I was able to reimplementation the apparent horizon 
+In the first, in about 12 hours spread out over a weeks timeframe, I was able to reimplementat the apparent horizon 
 location algorithm alongside Claude code. Claude code, generated the Python code and ran tests and iterated with me through 
 the whole process. Interestingly, in the process of implementation we ran across the same issues I had faced almost 30 years ago. 
 Claude does great in generating code and proposing possible solutions but the ultimate solution required me guiding it through testing and choices of methods that led to good outcomes.
