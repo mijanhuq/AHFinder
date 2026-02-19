@@ -10,12 +10,16 @@ work. I used Claude Code to implement methodology from two separate papers:
 
 In the first, in about 12 hours spread out over a weeks timeframe, I was able to reimplementation the apparent horizon 
 location algorithm alongside Claude code. Claude code, generated the Python code and ran tests and iterated with me through 
-the whole process. Interestingly, in the process of implementation we ran across the same issues I had faced almost 30 years ago. Claude does great in generating code and proposing possible solutions but the ultimate solution required me guiding it through testing and choices of methods that led to good outcomes.
+the whole process. Interestingly, in the process of implementation we ran across the same issues I had faced almost 30 years ago. 
+Claude does great in generating code and proposing possible solutions but the ultimate solution required me guiding it through testing and choices of methods that led to good outcomes.
 
 In the second paper, building building on the first, we (Claude and I) were able to put together a level-flow below in a matter of 2-3 hours reusing code from the first. 
 
-What this experiment showed me was that with the right prompting, review, insistence of testing and mutual iteration with Claude, ones ability to try out new ideas and implement fairly technical things is a game-changer, if used correctly. 
-Given the AI's access to universal knowledge and access to numerical methods and packages, it truly empowers the the user. It also is easy to get lost in what the LLM produces and thus on both sides, one must iterate on prompts in bite sized chunks in not only the AI's context but the human's context.
+What this experiment showed me was that with the right prompting, review, insistence on testing and mutual iteration with Claude, 
+ones ability to rapidly try out new ideas, rapid prototype and implement fairly technical things is a game-changer, if used correctly. 
+Given the AI's access to universal knowledge and access to numerical methods and packages, it truly empowers the the user. It also is 
+easy to get lost in what the LLM produces and thus on both sides, one must iterate on prompts in bite sized chunks in not only the AI's context but the human's context.
+Guard-rails, keeping the problem size small and ensuring that context is preserved from session to session is key to success.
 
 What follows are some details of the experimentation. 
 
@@ -78,7 +82,7 @@ When working with Claude there are a number of best practices one needs to follo
 * Just as a human developer such as you or perhaps a graduate student or a junior developer must, if something quantitative is implemented ensure that it is numerically correct. Have Claude write tests and carefully review. 
 * Claude will sometime detect that tests are failing or the trends in a graph look wrong and may suggest a fix before you even see it. 
 * Set the Claude context to make the LLM watch out for errors.
-* Bottom line, test thoroughly. In this case, where we use finite differencing, convergence test, test, test test... See [doc/ImplementationTests.md](doc/ImplementationTests.md).
+* Bottom line, test thoroughly. In this case, where we use finite differencing, convergence test, test, test test... See [doc/ImplementationTests.md](doc/ImplementationTests.md). For the level set method, testing is contained within [doc/ImplementationTests_level_set.md](doc/ImplementationTests_level_set.md).
 * Claude will use these tests to find bugs. In our case, we found some key bugs as a result of the tests. 
 * Claude will suggest alternate approaches than what was used in the original paper (in our example). Specify if you want that. Here given we are reimplementing 26+ year old algorithms, I gave Claude some leeway and it was good in its suggestions. Always review, review, review
 * Claude makes a choice of code implementation - it is not always the most generic and often directed code rather than reuseable extendable code. Watch for this and set the context to have it write reuseable code. 
