@@ -1493,3 +1493,91 @@ Implemented superposed Kerr-Schild for two Schwarzschild black holes:
 2. Shoemaker, Huq & Matzner (2000) - Part II: Level Flow method
 
 ---
+
+## Session: 2026-02-19 - Documentation Graphs and Level Flow Notebook
+
+### Prompt 1: Add graphs to doc/ImplementationTests_level_set.md
+
+Added 6 pre-existing graphs from `examples/` to the Level Set documentation:
+
+| Section | Graph | Description |
+|---------|-------|-------------|
+| §3.2 | `levelset_comparison.png` | Level-set vs spherical initial guess (both → area=42.4591) |
+| §4.1 | `levelset_field.png` | Θ(r) profiles, Θ(θ,φ) heatmap, Θ=0 isosurface |
+| §4.4 | `horizon_comparison.png` | Spherical vs scanned initial guess for boosted Kerr |
+| §5.3 | `binary_bh_horizons.png` | Peanut-shaped common horizon at separation=4M |
+| §5.4 | `binary_bh_transition.png` | Merger sequence from sep=12M to sep=3.5M |
+
+A graph initially added for §4.1 (`horizon_scan_results.png`) was removed at user request because the 3D surface panel did not render well.
+
+All paths use `../examples/` relative to the `doc/` folder.
+
+### Prompt 2: Create Level Flow Jupyter Notebook
+
+Created `notebooks/level_flow_horizon_finder.ipynb` following the same conventions as `notebooks/interactive_horizon_finder.ipynb`:
+
+- Static `%matplotlib inline` plots (no widgets)
+- Clear `# === PARAMETERS ===` blocks for easy modification
+- 7 examples covering all Level Flow features
+
+**Examples in the notebook**:
+
+| # | Title | Key API |
+|---|-------|---------|
+| 1 | Explicit Level Flow | `LevelFlowFinder.evolve(method='rk4', cfl=0.1)` |
+| 2 | Implicit Level Flow | `ImplicitLevelFlowFinder.evolve(dt=1.0/5.0)` |
+| 3 | Hybrid Method | `LevelFlowFinder.find_hybrid(initial_radius=5.0)` |
+| 4 | Kerr with Level Flow | Hybrid + spin comparison panel |
+| 5 | Binary BH (separated) | Individual horizons at sep=10M |
+| 6 | Binary BH (common) | Individual + common horizon at sep=4M |
+| 7 | Merger Transition | Sweep over separations 8→4M |
+
+**Key design decisions**:
+- `get_coords(metric, rho, N_s, center)` helper wraps `ApparentHorizonFinder.horizon_coordinates()` which correctly applies the `center` offset — used for binary BH global coordinates
+- `plot_cross_sections()` helper generates x-z and x-y plane cuts
+- Binary BH: separate `LevelFlowFinder` for each BH (with `center=bh_position`), plus one for common horizon at origin
+
+---
+
+## Session: 2026-02-19 - Level Flow Testing & Next Steps
+
+### Next Steps (recorded for future session)
+
+#### Issue 1: Kerr a=0.5 Failure in Level Flow Notebook
+
+The Kerr `a=0.5` case fails in `notebooks/level_flow_horizon_finder.ipynb` (Example 4), but the same spacetime converges correctly with the direct Newton solver (`ApparentHorizonFinder`). This discrepancy needs investigation.
+
+**Hypothesis**: The Level Flow PDE's CFL condition may be poorly suited to the Kerr Θ field structure. In `flow.py`:
+```python
+dt = cfl * rho_mean / (rms_theta + 1e-10)
+dt = min(dt, 0.1)  # hard cap
+```
+The hard cap `dt = 0.1` may cause the surface to overshoot or oscillate for Kerr spacetimes where Θ varies rapidly.
+
+**Files to investigate**:
+- `src/ahfinder/levelflow/flow.py` — CFL logic, regularized velocity, smoothing
+- `src/ahfinder/residual_vectorized.py` — how Θ is computed on the surface
+- `notebooks/level_flow_horizon_finder.ipynb` — Example 4 (Kerr with Level Flow)
+
+**Possible remedies**:
+- Reduce the CFL cap (e.g. `dt = min(dt, 0.01)`) for non-spherical cases
+- Use stronger regularization or smoothing for Kerr
+- Use implicit time-stepping (`ImplicitLevelFlowFinder`) for Kerr examples
+- Tune `initial_radius` to be closer to the known Kerr horizon radius `r+ = M + √(M²-a²)`
+
+#### Issue 2: Alternative Time-Integration Methods for Level Flow PDE
+
+The Level Flow PDE `∂ρ/∂t = -Θ` is currently solved with:
+- **Explicit Euler** (`method='euler'`) — simple but CFL-restricted
+- **Explicit RK4** (`method='rk4'`) — more accurate but same CFL restriction
+- **Backward Euler** (in `ImplicitLevelFlowFinder`) — unconditionally stable, large dt allowed
+
+Methods to evaluate and potentially implement:
+1. **Crank-Nicolson** — 2nd order implicit; average of forward and backward Euler. More accurate than Backward Euler with same stability.
+2. **Adaptive RK45** (scipy `solve_ivp`) — automatic step size control, error estimation. Avoids manual CFL tuning.
+3. **Rosenbrock methods** — semi-implicit, good for stiff ODEs; avoids full Newton solve at each step.
+4. **Operator splitting** — split Θ into stiff (angular) and non-stiff (radial) parts and handle separately.
+
+**Starting point**: Try `scipy.integrate.solve_ivp` with `method='RK45'` or `'Radau'` wrapping the existing `_compute_theta_grid()` function as the RHS. This would reuse all existing residual evaluation code with minimal new implementation.
+
+---
