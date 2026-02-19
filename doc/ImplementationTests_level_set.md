@@ -126,6 +126,14 @@ rho, info = finder.find_hybrid(
 
 **Key advantage**: Hybrid succeeds from r = 5.0 where pure Newton fails.
 
+### 3.2 Level-Set Initial Guess vs Spherical Initial Guess
+
+The 3D Θ field can provide a non-spherical initial guess for Newton. Both approaches converge to the same final horizon (Kerr, a=0.5, v=0.5, diagonal boost):
+
+![Level-set vs spherical initial guess comparison](../examples/levelset_comparison.png)
+
+Both the level-set shape (left) and the spherical guess (right) produce identical final horizons (area = 42.4591), confirming that the solution is unique and independent of the initial guess shape.
+
 ---
 
 ## 4. Topology Detection
@@ -140,6 +148,12 @@ from ahfinder.levelflow import TopologyDetector, detect_horizon_topology
 detector = TopologyDetector(metric, N_s=21, r_range=(0.5, 5.0), n_r=50)
 theta_field = detector.build_theta_field()
 ```
+
+The figure below shows (left) Θ(r) radial profiles at the equator for different spins, (middle) the angular distribution Θ(θ,φ) at a fixed radius, and (right) the extracted Θ=0 isosurface:
+
+![3D expansion field and isosurface](../examples/levelset_field.png)
+
+The radial profile clearly shows Θ < 0 inside the horizon and Θ > 0 outside, with the crossing point locating the apparent horizon. The isosurface (right panel) shows the horizon extracted by marching cubes before Newton refinement.
 
 ### 4.2 Marching Cubes Extraction
 
@@ -160,6 +174,14 @@ from scipy.sparse.csgraph import connected_components
 
 n_components, labels = connected_components(adjacency_matrix)
 ```
+
+### 4.4 Initial Guess Quality: Scanned vs Spherical
+
+For the a=0.5, v=0.5 diagonal boost case, both a spherical initial guess and the scanned non-spherical shape converge Newton to the identical solution:
+
+![Spherical vs scanned initial guess for boosted Kerr](../examples/horizon_comparison.png)
+
+The scanned shape (right) provides a more accurate starting point, reducing Newton iterations from 6 to 4 in this case.
 
 ---
 
@@ -201,6 +223,10 @@ At closer separations, a common horizon forms:
 
 The common horizon is elongated along the axis connecting the two black holes.
 
+![Binary BH horizons at separation=4M](../examples/binary_bh_horizons.png)
+
+The x-z plane (left) and x-y equatorial plane (right) both show the classic "peanut" shape of the common horizon (blue) surrounding the two individual horizons (red, green). Black dots mark the BH centers at x = ±2M.
+
 ### 5.4 Merger Transition
 
 | Separation | Horizons | Description |
@@ -211,6 +237,10 @@ The common horizon is elongated along the axis connecting the two black holes.
 | 5M | 2 + common | Common horizon forms |
 | 4M | 2 + common | Clear peanut shape |
 | 3M | 1 common | Individual horizons merge |
+
+![Binary BH merger transition](../examples/binary_bh_transition.png)
+
+The panel sequence shows the transition from well-separated individual horizons (sep=12M, top-left) to a single merged common horizon (sep=3.5M, bottom-right). The common horizon (blue) first appears at separation ≈ 5M and grows to encompass both individual horizons as they approach merger.
 
 ---
 
